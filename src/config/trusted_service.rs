@@ -147,6 +147,7 @@ fn parse_file_trusted_service(
     ts_id: &str,
     ts: &Table,
     expiration_seconds: u32,
+    api: &str,
 ) -> Result<TrustedService, CompilationError> {
     for forbidden in [
         "identity_attributes",
@@ -158,16 +159,18 @@ fn parse_file_trusted_service(
     ] {
         if ts.contains_key(forbidden) {
             return Err(err_config!(
-                "trusted_service {} with api \"file\" does not allow property '{}'",
+                "trusted_service {} with api '{}' does not allow property '{}'",
                 ts_id,
+                api,
                 forbidden
             ));
         }
     }
     if !ts.contains_key("returns_attributes") {
         return Err(err_config!(
-            "trusted_service {} with api \"file\" requires returns_attributes",
-            ts_id
+            "trusted_service {} with api '{}' requires returns_attributes",
+            ts_id,
+            api
         ));
     }
     let raw = parse_string_array(ts, "returns_attributes", "trusted_service")?;
@@ -176,13 +179,14 @@ fn parse_file_trusted_service(
     let returns_attrs = parse_return_mappings(ts_id, &raw, false)?;
     if returns_attrs.is_empty() {
         return Err(err_config!(
-            "trusted_service {} with api \"file\" requires at least one returns_attributes mapping",
-            ts_id
+            "trusted_service {} with api '{}' requires at least one returns_attributes mapping",
+            ts_id,
+            api
         ));
     }
     Ok(TrustedService {
         id: ts_id.to_string(),
-        api: zpl::TS_API_FILE.to_string(),
+        api: api.to_string(),
         expiration_seconds: expiration_seconds,
         returns_attrs: returns_attrs,
         ..Default::default()
@@ -212,13 +216,13 @@ pub(super) fn parse_trusted_service(
 
     let expiration_seconds = parse_expiration_seconds(ts, ts_id, is_default)?;
 
-    if api == zpl::TS_API_FILE {
+    if api == zpl::TS_API_FILE || api == zpl::TS_API_REST {
         if is_default {
             return Err(err_config!(
                 "default trusted_service cannot have api \"file\""
             ));
         }
-        return parse_file_trusted_service(ts_id, ts, expiration_seconds);
+        return parse_file_trusted_service(ts_id, ts, expiration_seconds, &api);
     }
 
     let cert_path = if ts.contains_key("cert_path") {

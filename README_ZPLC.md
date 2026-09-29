@@ -138,6 +138,9 @@ For non default trusted services, the field meanings are:
   * `file` - A file-backed attribute source offered by the visa service itself, with no
      network presence. The visa service loads the attributes from a local `<TSNAME>.json`
      file at runtime. See *File Trusted Services* below.
+    * `rest/1` - A mutually authenticated HTTPS attribute source accessed out of band by
+      the visa service. It has no ZPR-fabric endpoints; the URL and TLS credentials are
+      configured separately on the visa service. See *REST Trusted Services* below.
   * *addition values TBD*
 * `service` - Sets the service ID used in the **services** block for the visa-service
   facing service provided by this trusted service.  This is *optional* and by default
@@ -207,6 +210,29 @@ and `identity_attributes` properties are **not** allowed. The compiler weaves it
 offered by the visa service CN (`vs.zpr`) with no endpoints and no communication policy. The
 attribute mappings use the same `->` syntax (and single / `{}` multi / `#` tag forms) as any other
 trusted service (see *Attributes* below).
+
+### REST Trusted Services
+
+A `rest/1` service declares `returns_attributes` (at least one mapping) and
+`expiration_seconds` just like a file source. It does not declare `provider`,
+`client`, `service`, `cert_path`, or `identity_attributes` in the policy:
+
+```toml
+[trusted_services.directory]
+api = "rest/1"
+returns_attributes = ["department -> user.department"]
+expiration_seconds = 3600
+```
+
+The lifetime must exceed 60 seconds for the Visa Service REST client. Changes
+become visible when actor attributes expire or a source revision is invalidated
+by an admin flush; `rest/1` does not provide push notifications.
+
+The visa service must have a matching `[trusted_service_http.directory]` config
+section specifying an HTTPS origin, server CA, and client certificate/key. The
+source exposes `POST /v1/attributes` over mutual TLS. This transport is out of
+band, not a ZPR-fabric service. See the trusted-service command README in the
+Visa Service repository for the JSON wire contract and file/LDAPS provider options.
 
 ### Attributes
 

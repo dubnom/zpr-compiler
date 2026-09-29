@@ -1200,7 +1200,7 @@ impl Weaver {
                 let ts_api = config
                     .must_get(&format!("/trusted_services/{ts_name}/api"))
                     .to_string();
-                if ts_api == zpl::TS_API_FILE {
+                if ts_api == zpl::TS_API_FILE || ts_api == zpl::TS_API_REST {
                     continue;
                 }
 
@@ -1257,7 +1257,7 @@ impl Weaver {
             // protocol). It is offered by the Visa Service (vs.zpr) itself, so it lands in the VS
             // join policy via the ServiceType::Trusted path with an empty endpoint list, and gets
             // no communication policy.
-            if ts_api == zpl::TS_API_FILE {
+            if ts_api == zpl::TS_API_FILE || ts_api == zpl::TS_API_REST {
                 let vs_cn_attr = Attribute::tuple(zpl::KATTR_CN)
                     .single()
                     .value(zpl::VISA_SERVICE_CN)
@@ -1908,6 +1908,14 @@ mod test {
         [trusted_services.unused_fs]
         api = "file"
         returns_attributes = ["b -> user.unusedattr"]
+
+        [trusted_services.used_rest]
+        api = "rest/1"
+        returns_attributes = ["c -> user.remoteattr"]
+
+        [trusted_services.unused_rest]
+        api = "rest/1"
+        returns_attributes = ["d -> user.unusedremote"]
         "#;
         let ctx = CompilationCtx::default();
         let config = ConfigApi::new_from_toml_content(cfg, &env::temp_dir(), &ctx)
@@ -1928,6 +1936,16 @@ mod test {
         assert!(w.wctx.used_trusted_services.contains("used_fs"));
         assert!(!w.wctx.used_trusted_services.contains("unused_fs"));
 
+        let remote = Attribute::tuple("user.remoteattr")
+            .single()
+            .value("x")
+            .build()
+            .unwrap();
+        w.resolve_attributes(&[remote], &config)
+            .expect("REST attribute should resolve");
+        assert!(w.wctx.used_trusted_services.contains("used_rest"));
+        assert!(!w.wctx.used_trusted_services.contains("unused_rest"));
+
         // Only the used file service is woven into the fabric; the unused one is dropped.
         w.add_trusted_services(&config, &ctx)
             .expect("add_trusted_services");
@@ -1938,7 +1956,7 @@ mod test {
             .filter(|s| matches!(s.service_type, ServiceType::Trusted(_)))
             .map(|s| s.fabric_id.as_str())
             .collect();
-        assert_eq!(trusted, vec!["used_fs"]);
+        assert_eq!(trusted, vec!["used_fs", "used_rest"]);
     }
 
     #[test]
