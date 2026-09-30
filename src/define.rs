@@ -244,7 +244,16 @@ where
                         tok.col,
                     ));
                 }
-                let attr = if multiple || value.len() > 1 {
+                let attr = if name == crate::zpl::KATTR_ADDR {
+                    if multiple || value.len() != 1 {
+                        return Err(CompilationError::DefineStmtParseError(
+                            "zpr.addr must be a single-valued internal attribute".to_string(),
+                            tok.line,
+                            tok.col,
+                        ));
+                    }
+                    Attribute::try_zpr_internal_attr(name, value[0].clone())?
+                } else if multiple || value.len() > 1 {
                     Attribute::tuple(name)
                         .multi()
                         .values(value.to_vec())
@@ -647,5 +656,21 @@ mod test {
         let class = parse_define(&tz.tokens, 1).unwrap();
         assert_eq!(class.name, "alien");
         assert!(class.with_attrs.is_empty(), "expected no attributes");
+    }
+
+    // Regression test: zpr.addr in a service class remains an internal attribute,
+    // preserving the DNS actor's configured ZPR address.
+    #[test]
+    fn test_zpr_addr_class_attribute_keeps_internal_domain() {
+        let statement = "define ZprDNS as a service with device.zpr.adapter.cn:zpr-dns and zpr.addr:'fd5a:5052:adda:1::53'";
+        let tokens = tokenize_str(statement, &CompilationCtx::default())
+            .expect("DNS service class should tokenize");
+        let class = parse_define(&tokens.tokens, 1).expect("DNS service class should parse");
+        let address = class
+            .with_attrs
+            .iter()
+            .find(|attribute| attribute.zpl_key() == "zpr.addr")
+            .expect("ZPR address must remain in the internal domain");
+        assert_eq!(address.zpl_value(), "fd5a:5052:adda:1::53");
     }
 }
