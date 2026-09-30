@@ -6,7 +6,7 @@ use crate::define::{parse_define, resolve_class_flavors};
 use crate::errors::CompilationError;
 use crate::lex::{Token, TokenType};
 use crate::never::parse_never;
-use crate::ptypes::{Class, Policy};
+use crate::ptypes::{Class, ClassFlavor, Policy, ServiceDefinition};
 
 #[derive(Default)]
 pub struct ParsingResult {
@@ -52,21 +52,23 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
                 in_never = false;
                 current_statement.push(tok);
             }
-            TokenType::Allow | TokenType::Define | TokenType::Never => match state {
-                StatementState::Waiting => {
-                    if tok.line == period_line {
-                        return Err(CompilationError::MissingNewline(tok.line, tok.col));
+            TokenType::Allow | TokenType::Define | TokenType::Never | TokenType::Provide => {
+                match state {
+                    StatementState::Waiting => {
+                        if tok.line == period_line {
+                            return Err(CompilationError::MissingNewline(tok.line, tok.col));
+                        }
+                        in_never = tok.tt == TokenType::Never;
+                        current_statement.push(tok);
+                        state = StatementState::InStatement;
                     }
-                    in_never = tok.tt == TokenType::Never;
-                    current_statement.push(tok);
-                    state = StatementState::InStatement;
+                    StatementState::InStatement => {
+                        return Err(CompilationError::MissingStatementTerminator(
+                            tok.line, tok.col,
+                        ));
+                    }
                 }
-                StatementState::InStatement => {
-                    return Err(CompilationError::MissingStatementTerminator(
-                        tok.line, tok.col,
-                    ));
-                }
-            },
+            }
             _ => match state {
                 StatementState::InStatement => current_statement.push(tok),
                 StatementState::Waiting => {
@@ -151,6 +153,42 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
         }
     }
 
+    let mut declared_service_classes = HashMap::new();
+    let mut declared_dns_names = HashMap::new();
+    for statement in &statements {
+        if statement[0].tt != TokenType::Provide {
+            continue;
+        }
+        let definition = parse_service_definition(statement, &class_index, &classes)?;
+        if declared_service_classes
+            .insert(definition.service_class.clone(), definition.pos.clone())
+            .is_some()
+        {
+            return Err(CompilationError::ParseError(
+                format!(
+                    "service class {} is declared more than once",
+                    definition.service_class
+                ),
+                definition.pos.line,
+                definition.pos.col,
+            ));
+        }
+        if declared_dns_names
+            .insert(definition.dns_name.clone(), definition.pos.clone())
+            .is_some()
+        {
+            return Err(CompilationError::ParseError(
+                format!(
+                    "DNS name {} is declared more than once",
+                    definition.dns_name
+                ),
+                definition.pos.line,
+                definition.pos.col,
+            ));
+        }
+        policy.service_definitions.push(definition);
+    }
+
     // Next parse all the nevers.
     for (i, statement) in statements.iter().enumerate() {
         if statement[0].tt == TokenType::Never {
@@ -201,6 +239,135 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
     Ok(result)
 }
 
+fn parse_service_definition(
+    statement: &[Token],
+    class_index: &HashMap<String, String>,
+    classes: &HashMap<String, Class>,
+) -> Result<ServiceDefinition, CompilationError> {
+    let start = &statement[0];
+    if statement.len() != 7
+        || statement[2].tt != TokenType::At
+        || statement[4].tt != TokenType::Over
+    {
+        return Err(CompilationError::ParseError(
+            "expected `provide <service-class> at <dns-name> over <TCP|UDP> <port>`".to_string(),
+            start.line,
+            start.col,
+        ));
+    }
+    let service_name = literal(&statement[1]).ok_or_else(|| {
+        CompilationError::ParseError(
+            "expected service class name".to_string(),
+            statement[1].line,
+            statement[1].col,
+        )
+    })?;
+    let canonical_class = class_index
+        .get(&service_name.to_lowercase())
+        .ok_or_else(|| {
+            CompilationError::ParseError(
+                format!("unknown service class {service_name}"),
+                statement[1].line,
+                statement[1].col,
+            )
+        })?;
+    let class = classes.get(canonical_class).ok_or_else(|| {
+        CompilationError::BuildError(format!("class {canonical_class} missing from class table"))
+    })?;
+    if class.flavor != ClassFlavor::Service || class.is_builtin() {
+        return Err(CompilationError::ParseError(
+            format!("{} must be a user-defined service class", service_name),
+            statement[1].line,
+            statement[1].col,
+        ));
+    }
+
+    let dns_name = literal(&statement[3])
+        .ok_or_else(|| {
+            CompilationError::ParseError(
+                "expected DNS name".to_string(),
+                statement[3].line,
+                statement[3].col,
+            )
+        })?
+        .to_ascii_lowercase();
+    validate_dns_name(&dns_name, &statement[3])?;
+
+    let protocol = literal(&statement[5])
+        .ok_or_else(|| {
+            CompilationError::ParseError(
+                "expected TCP or UDP".to_string(),
+                statement[5].line,
+                statement[5].col,
+            )
+        })?
+        .to_ascii_lowercase();
+    if !matches!(protocol.as_str(), "tcp" | "udp") {
+        return Err(CompilationError::ParseError(
+            format!("unsupported service transport {protocol}; expected TCP or UDP"),
+            statement[5].line,
+            statement[5].col,
+        ));
+    }
+    let port_text = literal(&statement[6]).ok_or_else(|| {
+        CompilationError::ParseError(
+            "expected service port".to_string(),
+            statement[6].line,
+            statement[6].col,
+        )
+    })?;
+    let port = port_text
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or_else(|| {
+            CompilationError::ParseError(
+                format!("invalid service port {port_text}"),
+                statement[6].line,
+                statement[6].col,
+            )
+        })?;
+
+    Ok(ServiceDefinition {
+        service_class: canonical_class.clone(),
+        dns_name,
+        protocol,
+        port,
+        pos: start.into(),
+    })
+}
+
+fn literal(token: &Token) -> Option<&str> {
+    match &token.tt {
+        TokenType::Literal(value) => Some(value),
+        _ => None,
+    }
+}
+
+fn validate_dns_name(name: &str, token: &Token) -> Result<(), CompilationError> {
+    let labels: Vec<&str> = name.split('.').collect();
+    let valid = name.len() <= 253
+        && labels.len() >= 2
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.as_bytes()[0].is_ascii_alphanumeric()
+                && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(CompilationError::ParseError(
+            format!("invalid DNS name {name}; use lowercase ASCII DNS labels"),
+            token.line,
+            token.col,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -231,6 +398,76 @@ mod test {
                     panic!("failed to parse '{}': {:?}", valid, e);
                 }
             };
+        }
+    }
+
+    #[test]
+    fn test_parse_service_definition() {
+        let source = "define PayrollAPI as a service with data-class:confidential.\nprovide PayrollAPI at Payroll.Finance.svc.zpr over TCP 443.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(source, &ctx).expect("service definition should tokenize");
+        let policy = parse(tokens.tokens, &ctx)
+            .expect("service definition should parse")
+            .policy;
+
+        assert_eq!(policy.service_definitions.len(), 1);
+        let definition = &policy.service_definitions[0];
+        assert_eq!(definition.service_class, "PayrollAPI");
+        assert_eq!(definition.dns_name, "payroll.finance.svc.zpr");
+        assert_eq!(definition.protocol, "tcp");
+        assert_eq!(definition.port, 443);
+    }
+
+    #[test]
+    fn test_service_definition_requires_service_class_and_valid_scope() {
+        let invalid = [
+            (
+                "define payroll as a user with id.\nprovide payroll at payroll.svc.zpr over TCP 443.",
+                "user-defined service class",
+            ),
+            (
+                "define payroll as a service with id.\nprovide payroll at bad_name.svc.zpr over TCP 443.",
+                "invalid DNS name",
+            ),
+            (
+                "define payroll as a service with id.\nprovide payroll at payroll.svc.zpr over ICMP 443.",
+                "expected TCP or UDP",
+            ),
+            (
+                "define payroll as a service with id.\nprovide payroll at payroll.svc.zpr over TCP 0.",
+                "invalid service port",
+            ),
+        ];
+        let ctx = CompilationCtx::default();
+        for (source, expected_error) in invalid {
+            let tokens = tokenize_str(source, &ctx).expect("invalid declaration should tokenize");
+            let error = match parse(tokens.tokens, &ctx) {
+                Ok(_) => panic!("invalid declaration unexpectedly parsed: {source}"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains(expected_error),
+                "expected error containing {expected_error:?}, got {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_service_definition_rejects_duplicate_name_or_class() {
+        let duplicate_class = "define payroll as a service with id.\nprovide payroll at payroll.svc.zpr over TCP 443.\nprovide payroll at payroll-alt.svc.zpr over TCP 443.";
+        let duplicate_name = "define payroll as a service with id.\ndefine finance as a service with id.\nprovide payroll at shared.svc.zpr over TCP 443.\nprovide finance at shared.svc.zpr over TCP 443.";
+        let ctx = CompilationCtx::default();
+        for (source, expected_error) in [
+            (duplicate_class, "declared more than once"),
+            (duplicate_name, "declared more than once"),
+        ] {
+            let tokens =
+                tokenize_str(source, &ctx).expect("duplicate declarations should tokenize");
+            let error = match parse(tokens.tokens, &ctx) {
+                Ok(_) => panic!("duplicate declaration unexpectedly parsed: {source}"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains(expected_error));
         }
     }
 

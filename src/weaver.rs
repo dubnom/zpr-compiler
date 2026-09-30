@@ -317,7 +317,7 @@ impl Weaver {
             let mut attrs = Vec::new();
             let svc_class_attrs = attrs_for_class(class_idx, &define.name)?;
             attrs.extend_from_slice(&svc_class_attrs);
-            self.add_service(class_idx, define, &attrs, define.class_id, config)?;
+            self.add_service(class_idx, define, &attrs, define.class_id, policy, config)?;
         }
         Ok(())
     }
@@ -328,6 +328,7 @@ impl Weaver {
         sclass: &Class,
         initial_attrs: &[Attribute],
         svc_id: usize,
+        policy: &Policy,
         config: &ConfigApi,
     ) -> Result<(), CompilationError> {
         let service_name = &sclass.name;
@@ -339,24 +340,37 @@ impl Weaver {
         // the service configuration to use.
         //
 
-        let matched_service_name = find_defined_service(service_name, config, class_idx);
-        if matched_service_name.is_none() {
+        let declaration = policy
+            .service_definitions
+            .iter()
+            .find(|definition| definition.service_class == *service_name);
+        let configured_service_name = if declaration.is_none() {
+            find_defined_service(service_name, config, class_idx)
+        } else {
+            None
+        };
+        if declaration.is_none() && configured_service_name.is_none() {
             return Err(CompilationError::ConfigError(format!(
-                "no service for {} found in configuration",
-                service_name
+                "no service contract or configuration found for {service_name}"
             )));
         }
-        let matched_service_name = matched_service_name.unwrap();
+        let service_id = declaration
+            .map(|definition| definition.dns_name.clone())
+            .or_else(|| configured_service_name.clone())
+            .expect("a service declaration or configuration was found");
 
         // The service may have provider attributes that we need.
-        match config.get(&format!("/services/{}/provider", matched_service_name)) {
+        match configured_service_name
+            .as_ref()
+            .and_then(|name| config.get(&format!("/services/{name}/provider")))
+        {
             Some(citem) => match citem {
                 ConfigItem::AttrList(alist) => {
                     attrs.extend_from_slice(&vec_to_attributes(&alist)?);
                 }
                 _ => {
                     return Err(CompilationError::BuildError(format!(
-                        "provider not an attribute list: {matched_service_name}"
+                        "provider not an attribute list: {service_id}"
                     )));
                 }
             },
@@ -366,20 +380,33 @@ impl Weaver {
         };
 
         // service must have a protocol
-        let mut prot = match config.get(&format!("/services/{}/protocol", matched_service_name)) {
-            Some(citem) => match &citem {
-                ConfigItem::Protocol(_, _, _) => citem.try_into_protocol()?,
-                _ => {
-                    return Err(CompilationError::BuildError(format!(
-                        "protocol not a protocol enum: {matched_service_name}"
+        let mut prot = if let Some(definition) = declaration {
+            let builder = match definition.protocol.as_str() {
+                "tcp" => Protocol::tcp(service_id.clone()),
+                "udp" => Protocol::udp(service_id.clone()),
+                _ => unreachable!("service declaration parser validates transport protocols"),
+            };
+            builder
+                .add_port(PortSpec::Single(definition.port))
+                .build()?
+        } else {
+            let config_name = configured_service_name
+                .as_ref()
+                .expect("configured service name was checked above");
+            match config.get(&format!("/services/{config_name}/protocol")) {
+                Some(citem) => match &citem {
+                    ConfigItem::Protocol(_, _, _) => citem.try_into_protocol()?,
+                    _ => {
+                        return Err(CompilationError::BuildError(format!(
+                            "protocol not a protocol enum: {config_name}"
+                        )));
+                    }
+                },
+                None => {
+                    return Err(CompilationError::ConfigError(format!(
+                        "protocol for {config_name} not found in configuration"
                     )));
                 }
-            },
-            None => {
-                return Err(CompilationError::ConfigError(format!(
-                    "protocol for {} not found in configuration",
-                    matched_service_name,
-                )));
             }
         };
 
@@ -389,7 +416,9 @@ impl Weaver {
             Some(ConfigItem::KeySet(ts_names)) => {
                 for nam in ts_names {
                     match config.get(&format!("/trusted_services/{nam}/client_service")) {
-                        Some(ConfigItem::StrVal(cs_name)) if cs_name == matched_service_name => {
+                        Some(ConfigItem::StrVal(cs_name))
+                            if configured_service_name.as_ref() == Some(&cs_name) =>
+                        {
                             svc_type = ServiceType::Authentication;
 
                             // Also this service is actually provided by the trusted service, so:
@@ -428,13 +457,13 @@ impl Weaver {
         if svc_type == ServiceType::Regular && resolved_attrs.is_empty() {
             return Err(CompilationError::ConfigError(format!(
                 "service with no attributes: '{}'",
-                matched_service_name
+                service_id
             )));
         }
 
         let fabric_svc_id =
             self.fabric
-                .add_service(&matched_service_name, &prot, &resolved_attrs, svc_type)?;
+                .add_service(&service_id, &prot, &resolved_attrs, svc_type)?;
         self.wctx.map_allow_id_to_fabric_id(svc_id, fabric_svc_id);
         Ok(())
     }
@@ -525,7 +554,7 @@ impl Weaver {
                         "service class {} not found in class index",
                         server_service.class
                     )))?;
-            self.add_service(class_idx, svc_class, &attrs, svc_id, config)?;
+            self.add_service(class_idx, svc_class, &attrs, svc_id, policy, config)?;
         }
         Ok(())
     }
@@ -1533,7 +1562,9 @@ mod test {
     use super::*;
 
     use crate::context::CompilationCtx;
-    use crate::lex::Token;
+    use crate::lex::{Token, tokenize_str};
+    use crate::parser::parse;
+    use crate::protocols::{IanaProtocol, PortSpec};
     use crate::ptypes::{AllowClause, ClassFlavor, Clause, FPos};
     use std::env;
 
@@ -1689,6 +1720,56 @@ mod test {
             .iter()
             .find(|s| s.fabric_id == format!("{}/admin", zpl::VS_SERVICE_NAME));
         assert!(vs.is_some());
+    }
+
+    #[test]
+    fn test_service_contract_compiles_without_service_toml() {
+        let source = "define payroll as a service with device.zpr.adapter.cn:payroll.\nprovide payroll at payroll.finance.svc.zpr over TCP 443.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(source, &ctx).expect("service contract should tokenize");
+        let policy = parse(tokens.tokens, &ctx)
+            .expect("service contract should parse")
+            .policy;
+        let defaults = Class::defaults();
+        let mut class_index: HashMap<String, &Class> = defaults
+            .iter()
+            .map(|class| (class.name.clone(), class))
+            .collect();
+        for class in &policy.defines {
+            class_index.insert(class.name.clone(), class);
+        }
+
+        let config_source = r#"
+        [nodes.n0]
+        key = "none"
+        zpr_address = "fd5a:5052:90de::1"
+        interfaces = [ "in1" ]
+        in1.netaddr = "127.0.0.1:5000"
+        provider = [["device.zpr.adapter.cn", "node"]]
+
+        [visa_service]
+        dock_node = "n0"
+        "#;
+        let config = ConfigApi::new_from_toml_content(config_source, &env::temp_dir(), &ctx)
+            .expect("minimal bootstrap config should parse");
+        let mut weaver = Weaver::new(WeavingContext::default());
+        weaver
+            .init_services(&class_index, &policy, &config)
+            .expect("declared service should compile without a [services.*] entry");
+
+        let service = weaver
+            .fabric
+            .get_service("payroll.finance.svc.zpr")
+            .expect("DNS name should be the service ID in the fabric");
+        let protocol = service
+            .protocol
+            .as_ref()
+            .expect("service should have a protocol");
+        assert_eq!(protocol.get_layer4(), IanaProtocol::TCP);
+        assert_eq!(
+            protocol.get_port().expect("TCP scope should have a port"),
+            &[PortSpec::Single(443)]
+        );
     }
 
     #[test]

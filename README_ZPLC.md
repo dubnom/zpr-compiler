@@ -12,7 +12,7 @@ Suggest layout within the TOML file:
 * trusted_services
 * bootstrap
 * protocols
-* services
+* legacy application services
 
 
 ## Nodes
@@ -310,8 +310,8 @@ icmp_type = "request-response"
 icmp_codes = [0, 8]
 ```
 
-* `protocols.<NAME>` - The NAME here is used later in `services` blocks to reference
-the protocol.
+* `protocols.<NAME>` - The NAME here is used by legacy `services` blocks and trusted
+service configuration to reference the protocol.
 * `l4protocol` - Layer 4 protocol name. One of 'TCP', 'UDP', 'ICMPV6', or 'ICMP' (or 'ICMP4').
 * `port` - Port number. Currently only supports a single port number.
 * `icmp_type` - Required for the ICMP familty of protocols, possible values are: `request-response` or `oneshot`.
@@ -320,49 +320,53 @@ the protocol.
 
 
 
-## Services
+## Legacy application service configuration
 
-A service must be defined in the configuration for every service that is
-declared in the policy file.  The basic format is:
+New application service contracts belong in ZPL, not `.zplc`. Declare a
+service class, its DNS identity, and its initial TCP or UDP port scope in the
+policy:
 
-```toml
-[service.<NAME>]
-protocol = "" # required
+```zpl
+define PayrollAPI as a service with device.zpr.adapter.cn:payroll.
+provide PayrollAPI at payroll.finance.svc.zpr over TCP 443.
+allow finance employees to access PayrollAPI.
 ```
 
-The `<NAME>` must match a name in the ZPL policy file.  The `protocol` must match a
-protocol block defined elsewhere in the configuration.
+The DNS name is normalized to lowercase and emitted as the service ID in the
+signed policy. The compiler currently supports one TCP or UDP port per service
+declaration. A declaration compiles without an application `[services.*]`
+table.
 
-Since it is typical to have a protocol like `HTTPS` but then have instances that
-use many different ports, it is possible to override some aspects of a protocol in
-the service definition, for example:
+`[services.*]` remains temporarily supported for existing policies. It cannot
+declare a DNS identity and should be migrated to ZPL. Legacy tables may
+reference a protocol block and override its port:
 
 ```toml
 [protocol.webtls]
-l4protocl = "TCP"
+l4protocol = "TCP"
 port = 443
 
-[service.WebService]
+[services.WebService]
 protocol = "webtls"
 port = 3030
 ```
 
-To associate a service with an actor you need provider attributes. These can
-come from the ZPL, but you can also put them in the configuration.  Eg,
+Legacy service tables can supply provider attributes. New service definitions
+should put provider-matching attributes on their ZPL service class:
 
 ```toml
-[service.WebService]
+[services.WebService]
 protocol = "http"
 port = 80
 provider = [[ "device.zpr.adapter.cn", "foo.blah"]]
 ```
 
-If you need a static address for a service, the service adapter needs to specify
+If you need a static address for a legacy service, the service adapter needs to specify
 a `zpr_addr` in its config file AND the service configuration needs to match
 with a `zpr.addr` attribute.  For example,
 
 ```toml
-[service.WebService]
+[services.WebService]
 protocol = "http"
 port = 80
 provider = [[ "device.zpr.adapter.cn", "foo.blah"], ["zpr.addr", "fd5a:5052:2020::19"]]

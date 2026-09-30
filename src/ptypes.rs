@@ -14,12 +14,23 @@ use zpr::policy_types::{AttrDomain, Attribute};
 pub struct Policy {
     pub digest: Option<Digest>,
     pub defines: Vec<Class>,
+    pub service_definitions: Vec<ServiceDefinition>,
     pub nevers: Vec<AllowClause>,
     pub allows: Vec<AllowClause>,
 }
 
+/// A ZPL declaration binding a service class to its DNS identity and transport scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceDefinition {
+    pub service_class: String,
+    pub dns_name: String,
+    pub protocol: String,
+    pub port: u16,
+    pub pos: FPos,
+}
+
 /// FPos is a "file position" to better report errors in the ZPL parsing.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FPos {
     pub line: usize,
     pub col: usize,

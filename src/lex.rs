@@ -11,6 +11,8 @@ pub enum TokenType {
     Never,
     Allow,
     Define,
+    Provide,
+    At,
     With,
     To,     // to must preceed access
     Access, // access must be preceeded by to
@@ -52,7 +54,6 @@ const RESERVED_PREPOSITIONS: &[&str] = &[
     "among",
     "amongst",
     "around",
-    "at",
     "atop",
     "before",
     "behind",
@@ -117,6 +118,8 @@ impl Token {
             "never" => TokenType::Never,
             "allow" => TokenType::Allow,
             "define" => TokenType::Define,
+            "provide" => TokenType::Provide,
+            "at" => TokenType::At,
             "with" => TokenType::With,
             "to" => TokenType::To,
             "access" => TokenType::Access,

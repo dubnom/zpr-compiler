@@ -8,13 +8,13 @@
 //   - conditions / circumstances / limits (e.g. "before 18:00 GMT", "limited to 10Gb/day")
 //
 // KEYWORD STATE (from lex.rs):
-//   - Active keywords: never, allow, define, with, to, access, and, as, aka,
-//     tag, tags, on, optional, multiple, signal, over (plus "," as AND, "."
+//   - Active keywords: never, allow, define, provide, at, with, to, access, and,
+//     as, aka, tag, tags, on, optional, multiple, signal, over (plus "," as AND, "."
 //     followed by a newline to terminate a statement).
 //   - Keywords are case-insensitive ("ALLOW" == "allow"). Literals (class,
 //     attribute, and value names) are case-sensitive.
 //   - "a"/"an" are dropped as syntactic sugar wherever they appear (not just after "as").
-//   - "over" is a keyword and is therefore NOT one of the reserved prepositions.
+//   - "at" and "over" are keywords and are therefore NOT reserved prepositions.
 //     "link"/"links" are not keywords: they name the built-in link class and are
 //     tokenized as ordinary literals, exactly like "user"/"device"/"service".
 
@@ -32,7 +32,8 @@
 //     comment may follow the terminating period on its line. The trailing
 //     comment may directly follow the period (".#" and ".//" are legal).
 //   - Leading whitespace (indentation) before a statement is allowed.
-<statement> ::= (<permission-statement> | <denial-statement> | <define-statement>)
+<statement> ::= (<permission-statement> | <denial-statement> | <define-statement> |
+                 <service-declaration>)
                 <statement-terminator>
 
 <statement-terminator> ::= "." (<newline> | <end-of-input>)
@@ -44,6 +45,15 @@
 
 <define-statement> ::= "define" <name> <aka-clause>? "as" <class-name>
                        <with-attributes-clause>?
+
+// Declares the DNS identity and one transport scope for a service class.
+// The DNS name is normalized to lowercase and is also the emitted service ID.
+// The initial implementation supports one TCP or UDP port per declaration.
+<service-declaration> ::= "provide" <service-class-name> "at" <dns-name>
+                          "over" <transport-protocol> <port-number>
+<transport-protocol> ::= "tcp" | "udp"
+<dns-name> ::= <name>
+<port-number> ::= <unquoted-value>
 
 <p-statement> ::= <subject-clause> "to" "access" <object-clause> <over-clause>? <signal-clause>?
 
