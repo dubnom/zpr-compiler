@@ -33,7 +33,7 @@
 //     comment may directly follow the period (".#" and ".//" are legal).
 //   - Leading whitespace (indentation) before a statement is allowed.
 <statement> ::= (<permission-statement> | <denial-statement> | <define-statement> |
-                 <service-declaration>)
+                 <service-declaration> | <embedded-service>)
                 <statement-terminator>
 
 <statement-terminator> ::= "." (<newline> | <end-of-input>)
@@ -51,6 +51,11 @@
 // The initial implementation supports one TCP or UDP port per declaration.
 <service-declaration> ::= "provide" <service-class-name> "at" <dns-name>
                           "over" <transport-protocol> <port-number>
+// The JSON object is parsed and retained in the AST, but does not supply DNS
+// identity or transport scope for the signed policy. Its service_class field
+// must match the named user-defined service class. JSON comments are invalid.
+<embedded-service> ::= "service" <service-class-name> "as" "json" <json-object>
+<json-object> ::= <RFC-8259-JSON-object>
 <transport-protocol> ::= "tcp" | "udp"
 <dns-name> ::= <name>
 <port-number> ::= <unquoted-value>

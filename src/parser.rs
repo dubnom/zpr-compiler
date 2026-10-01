@@ -6,7 +6,7 @@ use crate::define::{parse_define, resolve_class_flavors};
 use crate::errors::CompilationError;
 use crate::lex::{Token, TokenType};
 use crate::never::parse_never;
-use crate::ptypes::{Class, ClassFlavor, Policy, ServiceDefinition};
+use crate::ptypes::{Class, ClassFlavor, EmbeddedService, Policy, ServiceDefinition};
 
 #[derive(Default)]
 pub struct ParsingResult {
@@ -68,6 +68,16 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
                         ));
                     }
                 }
+            }
+            TokenType::Literal(ref keyword)
+                if keyword.eq_ignore_ascii_case("service")
+                    && matches!(state, StatementState::Waiting) =>
+            {
+                if tok.line == period_line {
+                    return Err(CompilationError::MissingNewline(tok.line, tok.col));
+                }
+                current_statement.push(tok);
+                state = StatementState::InStatement;
             }
             _ => match state {
                 StatementState::InStatement => current_statement.push(tok),
@@ -156,6 +166,26 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
     let mut declared_service_classes = HashMap::new();
     let mut declared_dns_names = HashMap::new();
     for statement in &statements {
+        if matches!(&statement[0].tt, TokenType::Literal(keyword) if keyword.eq_ignore_ascii_case("service"))
+        {
+            let embedded = parse_embedded_service(statement, &class_index, &classes)?;
+            if policy
+                .embedded_services
+                .iter()
+                .any(|existing: &EmbeddedService| existing.service_class == embedded.service_class)
+            {
+                return Err(CompilationError::ParseError(
+                    format!(
+                        "service class {} has more than one JSON definition",
+                        embedded.service_class
+                    ),
+                    embedded.pos.line,
+                    embedded.pos.col,
+                ));
+            }
+            policy.embedded_services.push(embedded);
+            continue;
+        }
         if statement[0].tt != TokenType::Provide {
             continue;
         }
@@ -237,6 +267,85 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
 
     result.policy = policy;
     Ok(result)
+}
+
+fn parse_embedded_service(
+    statement: &[Token],
+    class_index: &HashMap<String, String>,
+    classes: &HashMap<String, Class>,
+) -> Result<EmbeddedService, CompilationError> {
+    let start = &statement[0];
+    if statement.len() != 5
+        || statement[2].tt != TokenType::As
+        || !literal(&statement[3]).is_some_and(|value| value.eq_ignore_ascii_case("json"))
+    {
+        return Err(CompilationError::ParseError(
+            "expected `service <service-class> as json <JSON object>`".into(),
+            start.line,
+            start.col,
+        ));
+    }
+    let name = literal(&statement[1]).ok_or_else(|| {
+        CompilationError::ParseError(
+            "expected service class name".into(),
+            statement[1].line,
+            statement[1].col,
+        )
+    })?;
+    let canonical = class_index.get(&name.to_lowercase()).ok_or_else(|| {
+        CompilationError::ParseError(
+            format!("unknown service class {name}"),
+            statement[1].line,
+            statement[1].col,
+        )
+    })?;
+    let class = classes
+        .get(canonical)
+        .expect("indexed service class exists");
+    if class.flavor != ClassFlavor::Service || class.is_builtin() {
+        return Err(CompilationError::ParseError(
+            format!("{name} must be a user-defined service class"),
+            statement[1].line,
+            statement[1].col,
+        ));
+    }
+    let TokenType::Json(raw) = &statement[4].tt else {
+        return Err(CompilationError::ParseError(
+            "expected JSON object".into(),
+            start.line,
+            start.col,
+        ));
+    };
+    let record: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        CompilationError::ParseError(
+            format!("invalid service JSON: {error}"),
+            statement[4].line,
+            statement[4].col,
+        )
+    })?;
+    let Some(object) = record.as_object() else {
+        return Err(CompilationError::ParseError(
+            "service JSON must be an object".into(),
+            start.line,
+            start.col,
+        ));
+    };
+    if object
+        .get("service_class")
+        .and_then(serde_json::Value::as_str)
+        != Some(canonical.as_str())
+    {
+        return Err(CompilationError::ParseError(
+            format!("service JSON service_class must match {canonical}"),
+            start.line,
+            start.col,
+        ));
+    }
+    Ok(EmbeddedService {
+        service_class: canonical.clone(),
+        record,
+        pos: start.into(),
+    })
 }
 
 fn parse_service_definition(
@@ -416,6 +525,59 @@ mod test {
         assert_eq!(definition.dns_name, "payroll.finance.svc.zpr");
         assert_eq!(definition.protocol, "tcp");
         assert_eq!(definition.port, 443);
+    }
+
+    #[test]
+    fn test_embedded_service_json() {
+        let source = "define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.\nservice PayrollRecords as json {\n  \"service_class\": \"PayrollRecords\",\n  \"endpoint\": \"zpr://payroll-records\",\n  \"details\": {\"path\": \"/v1.0\", \"items\": [1, 2]}\n}.\nallow users to access PayrollRecords.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(source, &ctx).expect("embedded JSON should tokenize");
+        let policy = parse(tokens.tokens, &ctx)
+            .expect("embedded JSON should parse")
+            .policy;
+        assert_eq!(policy.embedded_services.len(), 1);
+        assert_eq!(policy.embedded_services[0].service_class, "PayrollRecords");
+        assert_eq!(policy.embedded_services[0].record["details"]["items"][1], 2);
+        assert_eq!(policy.allows.len(), 1);
+    }
+
+    #[test]
+    fn test_embedded_service_rejects_invalid_json_and_classes() {
+        let cases = [
+            (
+                "service PayrollRecords as json {\"service_class\":\"PayrollRecords\",}.",
+                "invalid service JSON",
+            ),
+            (
+                "service PayrollRecords as json {\"service_class\":\"Other\"}.",
+                "must match PayrollRecords",
+            ),
+            (
+                "service PayrollRecords as json {\"service_class\":\"PayrollRecords\"}.",
+                "more than one JSON definition",
+            ),
+            (
+                "service PayrollRecords as json {\"service_class\":\"PayrollRecords\"",
+                "unterminated service JSON object",
+            ),
+        ];
+        let ctx = CompilationCtx::default();
+        for (statement, expected) in cases {
+            let source = if expected == "more than one JSON definition" {
+                format!("define PayrollRecords as a service.\n{statement}\n{statement}")
+            } else {
+                format!("define PayrollRecords as a service.\n{statement}")
+            };
+            let error =
+                match tokenize_str(&source, &ctx).and_then(|tokens| parse(tokens.tokens, &ctx)) {
+                    Ok(_) => panic!("unexpectedly accepted {source}"),
+                    Err(error) => error,
+                };
+            assert!(
+                error.to_string().contains(expected),
+                "expected {expected}, got {error}"
+            );
+        }
     }
 
     #[test]

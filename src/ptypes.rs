@@ -15,6 +15,7 @@ pub struct Policy {
     pub digest: Option<Digest>,
     pub defines: Vec<Class>,
     pub service_definitions: Vec<ServiceDefinition>,
+    pub embedded_services: Vec<EmbeddedService>,
     pub nevers: Vec<AllowClause>,
     pub allows: Vec<AllowClause>,
 }
@@ -26,6 +27,14 @@ pub struct ServiceDefinition {
     pub dns_name: String,
     pub protocol: String,
     pub port: u16,
+    pub pos: FPos,
+}
+
+/// An embedded JSON service record, retained without assigning transport semantics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedService {
+    pub service_class: String,
+    pub record: serde_json::Value,
     pub pos: FPos,
 }
 

@@ -26,6 +26,7 @@ pub enum TokenType {
     Optional,
     Multiple,
     Literal(String),
+    Json(String),
     Tuple((String, Vec<String>)),
     Period,
     Eos, // means "end of statement" but is never actually created
@@ -448,6 +449,50 @@ pub fn tokenize_str(zpl: &str, ctx: &CompilationCtx) -> Result<Tokenization, Com
                 col += 1;
             }
             '{' => {
+                if matches!(tokens.as_slice(), [.., Token { tt: TokenType::Literal(keyword), .. }, Token { tt: TokenType::Literal(_), .. }, Token { tt: TokenType::As, .. }, Token { tt: TokenType::Literal(format), .. }] if keyword.eq_ignore_ascii_case("service") && format.eq_ignore_ascii_case("json"))
+                {
+                    let start = (line, col);
+                    let mut json = String::from("{");
+                    let mut depth = 1;
+                    let mut in_string = false;
+                    let mut escaped = false;
+                    while depth > 0 {
+                        let next = chars.next().ok_or_else(|| {
+                            CompilationError::ParseError(
+                                "unterminated service JSON object".into(),
+                                start.0,
+                                start.1,
+                            )
+                        })?;
+                        json.push(next);
+                        if in_string {
+                            if escaped {
+                                escaped = false;
+                            } else if next == '\\' {
+                                escaped = true;
+                            } else if next == '"' {
+                                in_string = false;
+                            }
+                        } else {
+                            match next {
+                                '"' => in_string = true,
+                                '{' => depth += 1,
+                                '}' => depth -= 1,
+                                _ => {}
+                            }
+                        }
+                        if next == '\n' {
+                            line += 1;
+                            col = 1;
+                        } else {
+                            col += 1;
+                        }
+                    }
+                    let size = json.len();
+                    tokens.push(Token::new(TokenType::Json(json), start.0, start.1, size));
+                    col += 1;
+                    continue;
+                }
                 // Set notation for specifying values for a multi-valued attribute.
                 // Sets us into set_mode until closing bracket.
                 // Must be preceeded by a ':'.

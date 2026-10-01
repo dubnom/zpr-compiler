@@ -337,6 +337,19 @@ signed policy. The compiler currently supports one TCP or UDP port per service
 declaration. A declaration compiles without an application `[services.*]`
 table.
 
+For existing JSON service records, ZPL also accepts an embedded definition:
+
+```zpl
+define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.
+service PayrollRecords as json {"service_class":"PayrollRecords","actor_cn":"payroll-records","endpoint":"zpr://payroll-records"}.
+```
+
+The JSON must be a valid object whose `service_class` matches the named class.
+The compiler retains it in the parsed policy, but does not translate its fields
+into signed policy or infer a transport scope. Use `provide` or legacy
+`[services.*]` configuration for that scope. This JSON syntax is intended as
+a transition to native ZPL service definitions.
+
 `[services.*]` remains temporarily supported for existing policies. It cannot
 declare a DNS identity and should be migrated to ZPL. Legacy tables may
 reference a protocol block and override its port:
