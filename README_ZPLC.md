@@ -329,8 +329,17 @@ policy:
 ```zpl
 define PayrollAPI as a service with device.zpr.adapter.cn:payroll.
 provide PayrollAPI at payroll.finance.svc.zpr over TCP 443.
-allow finance employees to access PayrollAPI.
+allow finance users.
+never allow contractor users.
 ```
+
+`provide` opens a service-scoped rule group. Consecutive `allow` and `never
+allow` statements apply to that service and omit `to access <service>`; the
+target is supplied by the preceding declaration. The group ends at the next
+non-rule statement. Class definitions remain order-independent, but placing a
+definition between `provide` and its rules closes the group. The explicit-target
+form remains available outside a scoped group for migration of existing
+policies.
 
 The DNS name is normalized to lowercase and emitted as the service ID in the
 signed policy. The compiler currently supports one TCP or UDP port per service

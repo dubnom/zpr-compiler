@@ -39,9 +39,9 @@
 <statement-terminator> ::= "." (<newline> | <end-of-input>)
 
 
-<permission-statement> ::= "allow" <p-statement>
+<permission-statement> ::= "allow" (<scoped-p-statement> | <legacy-p-statement>)
 
-<denial-statement> ::= "never" "allow" <p-statement>
+<denial-statement> ::= "never" "allow" (<scoped-p-statement> | <legacy-p-statement>)
 
 <define-statement> ::= "define" <name> <aka-clause>? "as" <class-name>
                        <with-attributes-clause>?
@@ -51,6 +51,16 @@
 // The initial implementation supports one TCP or UDP port per declaration.
 <service-declaration> ::= "provide" <service-class-name> "at" <dns-name>
                           "over" <transport-protocol> <port-number>
+
+// A provide declaration is followed immediately by its service-scoped rules.
+// Any consecutive allow/never-allow statements belong to that service; another
+// declaration ends the group. The service target is implicit in these rules.
+<scoped-p-statement> ::= <subject-clause> <over-clause>? <signal-clause>?
+
+// Retained for policies that do not yet use provide-scoped rule groups.
+<legacy-p-statement> ::= <subject-clause> "to" "access" <object-clause>
+                         <over-clause>? <signal-clause>?
+
 // The JSON object is parsed and retained in the AST, but does not supply DNS
 // identity or transport scope for the signed policy. Its service_class field
 // must match the named user-defined service class. JSON comments are invalid.
@@ -59,8 +69,6 @@
 <transport-protocol> ::= "tcp" | "udp"
 <dns-name> ::= <name>
 <port-number> ::= <unquoted-value>
-
-<p-statement> ::= <subject-clause> "to" "access" <object-clause> <over-clause>? <signal-clause>?
 
 <subject-clause> ::= <user-spec> | <service-spec> | <device-spec> |
                      <user-spec> "on" <device-spec> |

@@ -6,7 +6,7 @@ use crate::define::{parse_define, resolve_class_flavors};
 use crate::errors::CompilationError;
 use crate::lex::{Token, TokenType};
 use crate::never::parse_never;
-use crate::ptypes::{Class, ClassFlavor, EmbeddedService, Policy, ServiceDefinition};
+use crate::ptypes::{AllowClause, Class, ClassFlavor, EmbeddedService, Policy, ServiceDefinition};
 
 #[derive(Default)]
 pub struct ParsingResult {
@@ -165,9 +165,12 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
 
     let mut declared_service_classes = HashMap::new();
     let mut declared_dns_names = HashMap::new();
-    for statement in &statements {
+    let mut scoped_service_classes = vec![None; statements.len()];
+    let mut active_service_class = None;
+    for (statement_index, statement) in statements.iter().enumerate() {
         if matches!(&statement[0].tt, TokenType::Literal(keyword) if keyword.eq_ignore_ascii_case("service"))
         {
+            active_service_class = None;
             let embedded = parse_embedded_service(statement, &class_index, &classes)?;
             if policy
                 .embedded_services
@@ -186,54 +189,68 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
             policy.embedded_services.push(embedded);
             continue;
         }
-        if statement[0].tt != TokenType::Provide {
-            continue;
+        match statement[0].tt {
+            TokenType::Provide => {
+                let definition = parse_service_definition(statement, &class_index, &classes)?;
+                if declared_service_classes
+                    .insert(definition.service_class.clone(), definition.pos.clone())
+                    .is_some()
+                {
+                    return Err(CompilationError::ParseError(
+                        format!(
+                            "service class {} is declared more than once",
+                            definition.service_class
+                        ),
+                        definition.pos.line,
+                        definition.pos.col,
+                    ));
+                }
+                if declared_dns_names
+                    .insert(definition.dns_name.clone(), definition.pos.clone())
+                    .is_some()
+                {
+                    return Err(CompilationError::ParseError(
+                        format!(
+                            "DNS name {} is declared more than once",
+                            definition.dns_name
+                        ),
+                        definition.pos.line,
+                        definition.pos.col,
+                    ));
+                }
+                active_service_class = Some(definition.service_class.clone());
+                policy.service_definitions.push(definition);
+            }
+            TokenType::Allow | TokenType::Never => {
+                scoped_service_classes[statement_index] = active_service_class.clone();
+            }
+            _ => active_service_class = None,
         }
-        let definition = parse_service_definition(statement, &class_index, &classes)?;
-        if declared_service_classes
-            .insert(definition.service_class.clone(), definition.pos.clone())
-            .is_some()
-        {
-            return Err(CompilationError::ParseError(
-                format!(
-                    "service class {} is declared more than once",
-                    definition.service_class
-                ),
-                definition.pos.line,
-                definition.pos.col,
-            ));
-        }
-        if declared_dns_names
-            .insert(definition.dns_name.clone(), definition.pos.clone())
-            .is_some()
-        {
-            return Err(CompilationError::ParseError(
-                format!(
-                    "DNS name {} is declared more than once",
-                    definition.dns_name
-                ),
-                definition.pos.line,
-                definition.pos.col,
-            ));
-        }
-        policy.service_definitions.push(definition);
     }
 
-    // Next parse all the nevers.
+    // Parse access rules in source order so each shorthand rule can inherit the
+    // service from the immediately preceding provide declaration.
     for (i, statement) in statements.iter().enumerate() {
         if statement[0].tt == TokenType::Never {
-            let never = parse_never(statement, i + 1, &class_index, &classes)?;
+            let never = parse_access_rule(
+                statement,
+                i + 1,
+                scoped_service_classes[i].as_deref(),
+                &class_index,
+                &classes,
+            )?;
             if ctx.verbose {
                 println!("{}", never.to_string_never());
             }
             policy.nevers.push(never);
-        }
-    }
-
-    // Next parse all the allows.
-    for (i, statement) in statements.iter().enumerate() {
-        if statement[0].tt == TokenType::Allow {
-            let allow = parse_allow(statement, i + 1, &class_index, &classes)?;
+        } else if statement[0].tt == TokenType::Allow {
+            let allow = parse_access_rule(
+                statement,
+                i + 1,
+                scoped_service_classes[i].as_deref(),
+                &class_index,
+                &classes,
+            )?;
             if ctx.verbose {
                 println!("{}", allow);
             }
@@ -267,6 +284,79 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
 
     result.policy = policy;
     Ok(result)
+}
+
+fn parse_access_rule(
+    statement: &[Token],
+    statement_id: usize,
+    service_context: Option<&str>,
+    class_index: &HashMap<String, String>,
+    classes: &HashMap<String, Class>,
+) -> Result<AllowClause, CompilationError> {
+    let clause_start = usize::from(statement[0].tt == TokenType::Never);
+    let signal_start = statement
+        .iter()
+        .position(|token| token.tt == TokenType::Signal)
+        .map(|index| {
+            if index > clause_start && statement[index - 1].tt == TokenType::And {
+                index - 1
+            } else {
+                index
+            }
+        });
+    let boundary = statement
+        .iter()
+        .position(|token| token.tt == TokenType::Over)
+        .into_iter()
+        .chain(signal_start)
+        .min()
+        .unwrap_or(statement.len());
+    let has_explicit_target = statement[clause_start..boundary]
+        .iter()
+        .any(|token| token.tt == TokenType::To);
+
+    if has_explicit_target && service_context.is_some() {
+        let root = &statement[0];
+        return Err(CompilationError::ParseError(
+            "the service target is implicit after provide; omit `to access <service>`".into(),
+            root.line,
+            root.col,
+        ));
+    }
+
+    let mut normalized_statement = statement.to_vec();
+    if !has_explicit_target {
+        let Some(service_class) = service_context else {
+            let root = &statement[0];
+            return Err(CompilationError::ParseError(
+                "an access rule without an explicit service target must immediately follow a provide declaration".into(),
+                root.line,
+                root.col,
+            ));
+        };
+        let root = &statement[0];
+        normalized_statement.splice(
+            boundary..boundary,
+            [
+                Token::new(TokenType::To, root.line, root.col, 2),
+                Token::new(TokenType::Access, root.line, root.col, 6),
+                Token::new(
+                    TokenType::Literal(service_class.to_string()),
+                    root.line,
+                    root.col,
+                    service_class.len(),
+                ),
+            ],
+        );
+    }
+
+    let clause = if statement[0].tt == TokenType::Never {
+        parse_never(&normalized_statement, statement_id, class_index, classes)?
+    } else {
+        parse_allow(&normalized_statement, statement_id, class_index, classes)?
+    };
+
+    Ok(clause)
 }
 
 fn parse_embedded_service(
@@ -1216,6 +1306,68 @@ allow marketing-emps to access role:marketing services.
         let pr = parse(tz.tokens, &ctx).expect("forward reference should resolve");
         assert_eq!(pr.policy.allows.len(), 1);
         assert_eq!(pr.policy.defines.len(), 1);
+    }
+
+    #[test]
+    fn test_provided_service_scopes_target_free_access_rules() {
+        let input = "provide payroll at payroll.finance.svc.zpr over TCP 443.\n\
+            allow finance users.\n\
+            never allow contractor users.\n\
+            define payroll as a service with device.zpr.adapter.cn:payroll.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(input, &ctx).unwrap();
+        let parsed = parse(tokens.tokens, &ctx).expect("scoped rules should parse");
+
+        assert_eq!(parsed.policy.service_definitions.len(), 1);
+        assert_eq!(parsed.policy.allows.len(), 1);
+        assert_eq!(parsed.policy.nevers.len(), 1);
+        assert_eq!(
+            parsed.policy.allows[0]
+                .get_server_service_clause()
+                .expect("implicit allow target should be present")
+                .class,
+            "payroll"
+        );
+        assert_eq!(
+            parsed.policy.nevers[0]
+                .get_server_service_clause()
+                .expect("implicit deny target should be present")
+                .class,
+            "payroll"
+        );
+    }
+
+    #[test]
+    fn test_service_scoped_rules_must_immediately_follow_provide() {
+        let input = "define payroll as a service with device.zpr.adapter.cn:payroll.\n\
+            provide payroll at payroll.finance.svc.zpr over TCP 443.\n\
+            define employee as a user with id.\n\
+            allow employees.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(input, &ctx).unwrap();
+        let error = match parse(tokens.tokens, &ctx) {
+            Ok(_) => panic!("intervening define should close service scope"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("immediately follow a provide"));
+    }
+
+    #[test]
+    fn test_service_scoped_rule_rejects_explicit_target() {
+        let input = "define payroll as a service with device.zpr.adapter.cn:payroll.\n\
+            provide payroll at payroll.finance.svc.zpr over TCP 443.\n\
+            allow users to access payroll.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(input, &ctx).unwrap();
+        let error = match parse(tokens.tokens, &ctx) {
+            Ok(_) => panic!("scoped rules should not repeat the implicit service target"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("target is implicit after provide")
+        );
     }
 
     // A signal clause must survive the full parse() pipeline intact and be
