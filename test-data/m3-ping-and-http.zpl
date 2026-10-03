@@ -9,7 +9,10 @@ define GoldenClient as an adapter with zpr.adapter.cn:'client.zpr.org'.
 define ZServicePingable as a service with device.zpr.adapter.cn:'service.zpr.org'.
 define ZWebService as a service with device.zpr.adapter.cn:'service.zpr.org'.
 
-allow GoldenClient to access ZServicePingable.
-allow GoldenClient to access ZWebService.
+provide ZServicePingable at pingable.svc.zpr over TCP 8080.
+allow GoldenClient.
+provide ZWebService at web.svc.zpr over TCP 80.
+allow GoldenClient.
 
-allow zpr.adapter.cn:'client.zpr.org' devices to access VisaService.
+provide VisaService at visa-admin.svc.zpr over TCP 443.
+allow zpr.adapter.cn:'client.zpr.org' devices.

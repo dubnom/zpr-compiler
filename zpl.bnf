@@ -18,7 +18,7 @@
 //     "link"/"links" are not keywords: they name the built-in link class and are
 //     tokenized as ordinary literals, exactly like "user"/"device"/"service".
 
-<zpl-policy> ::= <statement>*
+<zpl-policy> ::= (<declaration-statement> | <service-policy-group>)*
 
 // Every statement begins on a new line and is terminated by a period followed
 // by a newline or the end of the file.
@@ -32,16 +32,28 @@
 //     comment may follow the terminating period on its line. The trailing
 //     comment may directly follow the period (".#" and ".//" are legal).
 //   - Leading whitespace (indentation) before a statement is allowed.
-<statement> ::= (<permission-statement> | <denial-statement> | <define-statement> |
-                 <service-declaration> | <embedded-service>)
-                <statement-terminator>
+<declaration-statement> ::= (<define-statement> | <embedded-service>)
+                            <statement-terminator>
+
+<service-policy-group> ::= <service-declaration> <statement-terminator>
+                           <service-policy-rule>*
+
+<service-policy-rule> ::= (<permission-statement> | <denial-statement>)
+                          <statement-terminator>
+
+// Access rules occur only within the contiguous group below a provide.
+// Moving a rule below a different provide changes its service target.
+// define and embedded-service declarations end the active group; blank lines
+// and comments do not. A rule before a provide or after a group-ending
+// declaration is invalid. An explicit "to access" target is invalid even when
+// it repeats the current service. A class may have only one provide declaration.
 
 <statement-terminator> ::= "." (<newline> | <end-of-input>)
 
 
-<permission-statement> ::= "allow" (<scoped-p-statement> | <legacy-p-statement>)
+<permission-statement> ::= "allow" <scoped-p-statement>
 
-<denial-statement> ::= "never" "allow" (<scoped-p-statement> | <legacy-p-statement>)
+<denial-statement> ::= "never" "allow" <scoped-p-statement>
 
 <define-statement> ::= "define" <name> <aka-clause>? "as" <class-name>
                        <with-attributes-clause>?
@@ -54,16 +66,15 @@
 
 // A provide declaration is followed immediately by its service-scoped rules.
 // Any consecutive allow/never-allow statements belong to that service; another
-// declaration ends the group. The service target is implicit in these rules.
+// provide starts a new group, while define or embedded JSON ends the group.
+// The target is implicit and may not be repeated or replaced. "on" constrains
+// only the subject's device; target-side restrictions belong to the service class.
 <scoped-p-statement> ::= <subject-clause> <over-clause>? <signal-clause>?
-
-// Retained for policies that do not yet use provide-scoped rule groups.
-<legacy-p-statement> ::= <subject-clause> "to" "access" <object-clause>
-                         <over-clause>? <signal-clause>?
 
 // The JSON object is parsed and retained in the AST, but does not supply DNS
 // identity or transport scope for the signed policy. Its service_class field
-// must match the named user-defined service class. JSON comments are invalid.
+// must match the named user-defined service class. Following allow/never-allow
+// statements are scoped to this service. JSON comments are invalid.
 <embedded-service> ::= "service" <service-class-name> "as" "json" <json-object>
 <json-object> ::= <RFC-8259-JSON-object>
 <transport-protocol> ::= "tcp" | "udp"
@@ -74,11 +85,11 @@
                      <user-spec> "on" <device-spec> |
                      <service-spec> "on" <device-spec>
 
-<object-clause> ::= <service-spec> | <service-spec> "on" <device-spec>
-
 // The "over" clause constrains the links of the communication path (ZRFC 15):
-// "Allow sales employees to access customer databases over secure links."
-// "Allow finance users to access payroll-services over location:usa links."
+// provide CustomerDB at customer.svc.zpr over TCP 443.
+// allow sales employees over secure links.
+// provide PayrollAPI at payroll.svc.zpr over TCP 443.
+// allow finance users over location:usa links.
 // The statement applies only if a permitted path exists whose links all satisfy
 // the link description. The compiler records the constraints in the policy
 // (CPolicy.linkConds); it does NOT check that such a path exists — that is the

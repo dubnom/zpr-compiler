@@ -1,16 +1,14 @@
 
-Allow red services                                    to access blue services.
-Allow green users                on yellow devices  to access blue services on orange devices.
-Allow red services               on yellow devices  to access blue services on orange devices.
-Allow user.green, brown services on yellow devices  to access blue services.
-Allow service.brown, green users on yellow devices  to access blue services.
-Allow red services                                    to access user.green, blue services on yellow devices.
-
-
-define MyDb as a service with tag blue.
+define MyDb as a service with tag blue and device.zpr.adapter.cn:mydb.
 define MyWeb as a service with tag red.
 
-Allow MyWeb to access MyDb.
+provide MyDb at mydb.svc.zpr over TCP 80.
+Allow red services.
+Allow green users on yellow devices.
+Allow red services on yellow devices.
+Allow user.green, brown services on yellow devices.
+Allow service.brown, green users on yellow devices.
+Allow MyWeb.
 
 
 

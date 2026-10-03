@@ -3,6 +3,7 @@
 # compiler warns rather than failing: link values are topology data that a later
 # configuration edit may legitimately introduce.
 
-define database as a service.
+define database as a service with device.zpr.adapter.cn:database.
 
-allow redhead users to access database over location:use links.
+provide database at database.svc.zpr over TCP 80.
+allow redhead users over location:use links.

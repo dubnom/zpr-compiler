@@ -624,19 +624,19 @@ fn test_bin2_ordering_is_deterministic() {
         );
     }
 
-    // Within a service, ZPL source order survives: `never` first, then the allows.
-    let db1: Vec<&str> = snap
+    // Within a provided service, ZPL source order survives: `never` first, then the allows.
+    let database_rules: Vec<&str> = snap
         .com_policies
         .iter()
-        .filter(|(id, ..)| id == "database#1")
+        .filter(|(id, ..)| id == "database.svc.zpr")
         .map(|(_, zpl, ..)| zpl.as_str())
         .collect();
     assert_eq!(
-        db1,
+        database_rules,
         vec![
-            "(line 9) never allow color:red employees to access classified databases",
-            "(line 10) allow lazy, color:green employees to access classified databases on tint:sales devices",
-            "(line 11) allow clearance:classified government users to access classified services",
+            "(line 9) never allow color:red employees",
+            "(line 10) allow lazy, color:green employees on tint:sales devices",
+            "(line 11) allow clearance:classified government users",
         ]
     );
 
@@ -687,9 +687,9 @@ fn test_bin2_ordering_is_deterministic() {
         "fixture needs multiple trusted services"
     );
     assert_eq!(
-        db1.len(),
+        database_rules.len(),
         3,
-        "fixture needs a suffixed service with 3 rules"
+        "fixture needs a provided service with 3 rules"
     );
 }
 
@@ -712,7 +712,7 @@ fn test_tag_conditions_one_key_per_tag() {
     let mut allow_keys: Option<Vec<String>> = None;
     let mut deny_keys: Option<Vec<String>> = None;
     for cp in policy.get_com_policies().unwrap().iter() {
-        if cp.get_service_id().unwrap().to_str().unwrap() != "database" {
+        if cp.get_service_id().unwrap().to_str().unwrap() != "database.svc.zpr" {
             continue;
         }
         let mut keys = Vec::new();
@@ -774,7 +774,7 @@ fn test_link_conditions_end_to_end() {
     let mut saw_policy_without_links = false;
 
     for cp in policy.get_com_policies().unwrap().iter() {
-        if cp.get_service_id().unwrap().to_str().unwrap() != "database" {
+        if cp.get_service_id().unwrap().to_str().unwrap() != "database.svc.zpr" {
             continue;
         }
         let mut link_conds = Vec::new();

@@ -1,14 +1,16 @@
-allow clearance:classified government users to access classified
-services.
-
-
-# test
+define ClassifiedServices as a service with device.zpr.adapter.cn:classified-services.
 define database as a service with user.bas_id:1234.
 define employee as a user with user.bas_id.
+define ClassifiedDatabases as a service with device.zpr.adapter.cn:classified-databases.
+define AuthService as a service with device.zpr.adapter.cn:'bas.zpr.org'.
+define NetAdmins as users with device.zpr.adapter.cn:'admin.zpr.org'.
 
-allow lazy, color:red employees to access classified databases on tint:sales devices.
+provide ClassifiedServices at classified-services.svc.zpr over TCP 443.
+allow clearance:classified government users.
+allow device.zpr.adapter.cn: users.
 
-allow device.zpr.adapter.cn:  users to access classified services.
+provide ClassifiedDatabases at classified-databases.svc.zpr over TCP 443.
+allow lazy, color:red employees on tint:sales devices.
 
 
 # FIXME?
@@ -17,8 +19,6 @@ allow device.zpr.adapter.cn:  users to access classified services.
 # ZPL author must define any auth services and ensure that
 # the service name is present in the configuration.
 
-define AuthService as a service.
-
 // define AuthService as a service with device.zpr.adapter.cn:'bas.zpr.org'
 // consider "define AuthService as a service on devices with cn:'bas.zpr.org'
 
@@ -26,10 +26,9 @@ define AuthService as a service.
 // services for adapters.
 // Access for the visa service is added by the compiler.
 
-allow zpr.adapter.cn: devices to access AuthService.
-
-# In policy you can define "administrators" in any way you want.
-define NetAdmins as users with device.zpr.adapter.cn:'admin.zpr.org'.
+provide AuthService at auth.svc.zpr over TCP 443.
+allow zpr.adapter.cn: devices.
 
 # VisaService is a reserved name.
-allow hair_color:red NetAdmins to access VisaService.
+provide VisaService at visa-admin.svc.zpr over TCP 443.
+allow hair_color:red NetAdmins.

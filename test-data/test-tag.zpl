@@ -1,10 +1,11 @@
 
 
-define database as a service.
+define database as a service with device.zpr.adapter.cn:database.
 
 
-allow redhead, nerd users to access database.
-never allow baldy, stud users to access database.
+provide database at database.svc.zpr over TCP 80.
+allow redhead, nerd users.
+never allow baldy, stud users.
 
 
 

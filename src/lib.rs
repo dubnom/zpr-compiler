@@ -22,6 +22,7 @@ pub mod dumpv2;
 pub mod errors;
 mod fabric;
 mod fabric_util;
+pub mod format;
 mod lex;
 mod never;
 mod parser;

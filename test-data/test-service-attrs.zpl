@@ -1,44 +1,31 @@
 
 
+define WebServiceGreen as a service with user.bas_id:1234 and service.content:green and device.zpr.adapter.cn:webservice.
+define WebServiceBrown as a service with user.bas_id:1234 and service.content:brown and device.zpr.adapter.cn:webservice.
+define WebService as a service with user.bas_id:1234 and device.zpr.adapter.cn:webservice.
+define FooServiceGreen as a service with user.bas_id:4567 and service.content:green and device.zpr.adapter.cn:fooservice.
+define FooServiceBrown as a service with user.bas_id:4567 and service.content:brown and device.zpr.adapter.cn:fooservice.
+define FooService as a service with user.bas_id:4567 and device.zpr.adapter.cn:fooservice.
 
-
-define WebService as a service with user.bas_id:1234.
-
-allow color:green users to access content:green services.
-allow color:brown users to access content:brown services.
-allow color:red users to access WebService.
-
-define FooService as a service with user.bas_id:4567.
-allow color:green users to access content:green FooServices.
-allow color:purple users to access FooServices.
+provide WebServiceGreen at web-green.svc.zpr over TCP 80.
+allow color:green users.
+provide WebServiceBrown at web-brown.svc.zpr over TCP 80.
+allow color:brown users.
+provide WebService at web.svc.zpr over TCP 80.
+allow color:red users.
+provide FooServiceGreen at foo-green.svc.zpr over TCP 80.
+allow color:green users.
+provide FooServiceBrown at foo-brown.svc.zpr over TCP 80.
+allow color:brown users.
+provide FooService at foo.svc.zpr over TCP 80.
+allow color:purple users.
 
 
 # What we expect:
 #
-# CONNECT:
-#   user.bas_id:1234 then advertise WebService
-#   user.bas_id:4567 then advertise FooService
-#   user.bas_id:4567 && service.content:green then advertise FooService#1
-#   user.color:green OK
-#   user.color:brown OK
-#   user.color:red OK
-#   user.color:purple OK
+# CONNECT: service attributes are declared on each provided service class.
 #
 # POLICIES:
-#   WebService
-#     svc_cond: content:green
-#     cli_cond: color:green
-#   WebService
-#     svc_cond: content:brown
-#     cli_cond: color:brown
-#   WebService
-#     cli_cond: color:red
-#   FooService
-#     svc_cond: content:green
-#     cli_cond: color:green
-#  FooService:
-#     svc_cond: content:brown
-#     cli_conf: color:brown
-#   FooService
-#     cli:cond: color:purple
+#   Each allow applies to the service declared immediately before it.
+#   Service attributes are not repeated on the allow statement.
 #

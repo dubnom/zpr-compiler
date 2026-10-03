@@ -68,8 +68,13 @@ peers = [ { node = "<NODEID>" },
 
 ### Link attributes
 
-Link attributes are what a ZPL `over` clause matches against, eg
-`allow red users to access database over secure, location:usa links.`
+Link attributes are what a ZPL `over` clause matches against. Access rules follow
+the service declaration, so the service target is implicit:
+
+```zpl
+provide Database at database.svc.zpr over TCP 443.
+allow red users over secure, location:usa links.
+```
 
 An entry is either a key/value pair or a **tag**. A tag is written with a `#`
 prefix and an empty value, the same spelling used by `returns_attributes`:

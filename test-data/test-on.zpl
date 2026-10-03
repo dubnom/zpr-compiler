@@ -1,39 +1,27 @@
 
 
-define Image-database as a service.
-
-# ON - used for a client device clause
-# In this case the client user is on a secure device.
-allow clearance:classified government users on hardened devices to access level:classified services.
-#___________________________________________↑
-
-# ON - used for a service clause
-# In this case the service is on a secure device.
-
-# First, here is old way that should still work.
-allow clearance:classified government users to access level:classified, device.hardened services.
-
-# And here is new way using ON
-allow clearance:classified government users to access level:classified services on encrypted devices.
-#_______________________________________________________________________________↑
-
-
-# Now define an device that requires an attribute. And then use that in a
-# trailing ON clause.
-define LockedDevice as an device with tag encrypted.
-allow clearance:classified government users to access level:secret services on LockedDevices.
-#___________________________________________________________________________↑
-
-
-
-# Defines as usual must use the WITH format.
+define Image-database as a service with service.level:classified and device.zpr.adapter.cn:image-database.
+define ClassifiedImageDatabase as a service with service.level:classified and device.zpr.adapter.cn:classified-image-database.
+define EncryptedImageDatabase as a service with service.level:classified and device.zpr.adapter.cn:encrypted-image-database.
+define SecretImageDatabase as a service with service.level:secret and device.zpr.adapter.cn:secret-image-database.
 define ServiceRequiresEncrypted as an Image-database with tag device.encrypted.
-allow clearance:public users to access ServiceRequiresEncrypted.
-
-
-define AuthService as a service.
-
-# Here is an device clause without ON since there is no user clause.
-allow zpr.adapter.cn: devices to access AuthService.
+define LockedDevice as an device with tag encrypted.
+define AuthService as a service with device.zpr.adapter.cn:auth-service.
 define NetAdmins as users with device.zpr.adapter.cn:'admin.zpr.org'.
-allow NetAdmins to access VisaService.
+
+# ON remains available on the client side; service selection comes from each
+# provide declaration, and service/device attributes live on that service class.
+provide Image-database at image-database.svc.zpr over TCP 443.
+allow clearance:classified government users on hardened devices.
+provide ClassifiedImageDatabase at classified-image-database.svc.zpr over TCP 443.
+allow clearance:classified government users.
+provide EncryptedImageDatabase at encrypted-image-database.svc.zpr over TCP 443.
+allow clearance:classified government users.
+provide SecretImageDatabase at secret-image-database.svc.zpr over TCP 443.
+allow clearance:classified government users.
+provide ServiceRequiresEncrypted at encrypted-service.svc.zpr over TCP 443.
+allow clearance:public users.
+provide AuthService at auth.svc.zpr over TCP 443.
+allow zpr.adapter.cn: devices.
+provide VisaService at visa-admin.svc.zpr over TCP 443.
+allow NetAdmins.

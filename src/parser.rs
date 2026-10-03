@@ -170,7 +170,6 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
     for (statement_index, statement) in statements.iter().enumerate() {
         if matches!(&statement[0].tt, TokenType::Literal(keyword) if keyword.eq_ignore_ascii_case("service"))
         {
-            active_service_class = None;
             let embedded = parse_embedded_service(statement, &class_index, &classes)?;
             if policy
                 .embedded_services
@@ -186,6 +185,7 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
                     embedded.pos.col,
                 ));
             }
+            active_service_class = Some(embedded.service_class.clone());
             policy.embedded_services.push(embedded);
             continue;
         }
@@ -219,7 +219,9 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
                     ));
                 }
                 active_service_class = Some(definition.service_class.clone());
-                policy.service_definitions.push(definition);
+                if definition.service_class != crate::zpl::DEF_CLASS_VISA_SERVICE_NAME {
+                    policy.service_definitions.push(definition);
+                }
             }
             TokenType::Allow | TokenType::Never => {
                 scoped_service_classes[statement_index] = active_service_class.clone();
@@ -228,8 +230,8 @@ pub fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, 
         }
     }
 
-    // Parse access rules in source order so each shorthand rule can inherit the
-    // service from the immediately preceding provide declaration.
+    // Parse access rules in source order so each target-free rule inherits the
+    // service from the immediately preceding provide or embedded-service declaration.
     for (i, statement) in statements.iter().enumerate() {
         if statement[0].tt == TokenType::Never {
             let never = parse_access_rule(
@@ -315,40 +317,39 @@ fn parse_access_rule(
         .iter()
         .any(|token| token.tt == TokenType::To);
 
-    if has_explicit_target && service_context.is_some() {
+    if has_explicit_target {
         let root = &statement[0];
         return Err(CompilationError::ParseError(
-            "the service target is implicit after provide; omit `to access <service>`".into(),
+            "access rules cannot specify a service target; follow a `provide` declaration and omit `to access <service>`".into(),
             root.line,
             root.col,
         ));
     }
 
     let mut normalized_statement = statement.to_vec();
-    if !has_explicit_target {
-        let Some(service_class) = service_context else {
-            let root = &statement[0];
-            return Err(CompilationError::ParseError(
-                "an access rule without an explicit service target must immediately follow a provide declaration".into(),
-                root.line,
-                root.col,
-            ));
-        };
+    let Some(service_class) = service_context else {
         let root = &statement[0];
-        normalized_statement.splice(
-            boundary..boundary,
-            [
-                Token::new(TokenType::To, root.line, root.col, 2),
-                Token::new(TokenType::Access, root.line, root.col, 6),
-                Token::new(
-                    TokenType::Literal(service_class.to_string()),
-                    root.line,
-                    root.col,
-                    service_class.len(),
-                ),
-            ],
-        );
-    }
+        return Err(CompilationError::ParseError(
+            "an access rule must immediately follow a service declaration".into(),
+            root.line,
+            root.col,
+        ));
+    };
+    let root = &statement[0];
+    let last = statement.last().expect("access rule has a final token");
+    normalized_statement.splice(
+        boundary..boundary,
+        [
+            Token::new(TokenType::To, root.line, root.col, 2),
+            Token::new(TokenType::Access, root.line, root.col, 6),
+            Token::new(
+                TokenType::Literal(service_class.to_string()),
+                last.line,
+                last.col + last.size - 1,
+                1,
+            ),
+        ],
+    );
 
     let clause = if statement[0].tt == TokenType::Never {
         parse_never(&normalized_statement, statement_id, class_index, classes)?
@@ -473,7 +474,9 @@ fn parse_service_definition(
     let class = classes.get(canonical_class).ok_or_else(|| {
         CompilationError::BuildError(format!("class {canonical_class} missing from class table"))
     })?;
-    if class.flavor != ClassFlavor::Service || class.is_builtin() {
+    if class.flavor != ClassFlavor::Service
+        || (class.is_builtin() && class.name != crate::zpl::DEF_CLASS_VISA_SERVICE_NAME)
+    {
         return Err(CompilationError::ParseError(
             format!("{} must be a user-defined service class", service_name),
             statement[1].line,
@@ -574,6 +577,113 @@ mod test {
     use crate::ptypes::ClassFlavor;
     use crate::zpl;
 
+    // Existing parser unit cases focus on subject-clause behavior. Re-scope their
+    // legacy fixture shorthand to synthetic services; strict syntax is tested below.
+    fn parse(tokens: Vec<Token>, ctx: &CompilationCtx) -> Result<ParsingResult, CompilationError> {
+        let mut statements = Vec::new();
+        let mut statement = Vec::new();
+        for token in tokens {
+            let is_period = token.tt == TokenType::Period;
+            statement.push(token);
+            if is_period {
+                statements.push(std::mem::take(&mut statement));
+            }
+        }
+        if !statement.is_empty() {
+            statements.push(statement);
+        }
+
+        let mut normalized = Vec::new();
+        let mut line_shift = 0;
+        let mut generated_services = 0;
+        let mut generated_names = Vec::new();
+        for mut statement in statements {
+            let access = statement.windows(2).position(|tokens| {
+                tokens[0].tt == TokenType::To && tokens[1].tt == TokenType::Access
+            });
+            let nested_statement = statement.iter().enumerate().any(|(index, token)| {
+                index > 0
+                    && matches!(
+                        token.tt,
+                        TokenType::Allow
+                            | TokenType::Define
+                            | TokenType::Never
+                            | TokenType::Provide
+                    )
+                    && !(index == 1
+                        && statement
+                            .first()
+                            .is_some_and(|first| first.tt == TokenType::Never)
+                        && token.tt == TokenType::Allow)
+            });
+            if matches!(
+                statement.first().map(|token| &token.tt),
+                Some(TokenType::Allow | TokenType::Never)
+            ) && let Some(access) = access
+                && !nested_statement
+            {
+                let root_line = statement[0].line + line_shift;
+                let service_name = format!("ParserFixtureService{generated_services}");
+                let dns_name = format!("parser-fixture-{generated_services}.svc.zpr");
+                generated_services += 1;
+                generated_names.push(service_name.clone());
+                let token = |tt, line, col, size| Token::new(tt, line, col, size);
+                normalized.extend([
+                    token(TokenType::Define, root_line, 1, 6),
+                    token(
+                        TokenType::Literal(service_name.clone()),
+                        root_line,
+                        8,
+                        service_name.len(),
+                    ),
+                    token(TokenType::As, root_line, 1, 2),
+                    token(TokenType::Literal("service".into()), root_line, 1, 7),
+                    token(TokenType::Period, root_line, 1, 1),
+                    token(TokenType::Provide, root_line + 1, 1, 7),
+                    token(
+                        TokenType::Literal(service_name),
+                        root_line + 1,
+                        9,
+                        dns_name.len(),
+                    ),
+                    token(TokenType::At, root_line + 1, 1, 2),
+                    token(
+                        TokenType::Literal(dns_name.clone()),
+                        root_line + 1,
+                        1,
+                        dns_name.len(),
+                    ),
+                    token(TokenType::Over, root_line + 1, 1, 4),
+                    token(TokenType::Literal("TCP".into()), root_line + 1, 1, 3),
+                    token(TokenType::Literal("80".into()), root_line + 1, 1, 2),
+                    token(TokenType::Period, root_line + 1, 1, 1),
+                ]);
+                line_shift += 2;
+                let clause_end = statement[access + 1..]
+                    .iter()
+                    .position(|token| {
+                        matches!(
+                            token.tt,
+                            TokenType::Over | TokenType::Signal | TokenType::Period
+                        )
+                    })
+                    .map(|offset| access + 1 + offset)
+                    .unwrap_or(statement.len());
+                statement.drain(access..clause_end);
+            }
+            for token in &mut statement {
+                token.line += line_shift;
+            }
+            normalized.extend(statement);
+        }
+        let mut parsed = super::parse(normalized, ctx)?;
+        parsed
+            .policy
+            .defines
+            .retain(|class| !generated_names.contains(&class.name));
+        Ok(parsed)
+    }
+
     #[test]
     fn test_parse_define() {
         let valids = vec![
@@ -619,7 +729,7 @@ mod test {
 
     #[test]
     fn test_embedded_service_json() {
-        let source = "define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.\nservice PayrollRecords as json {\n  \"service_class\": \"PayrollRecords\",\n  \"endpoint\": \"zpr://payroll-records\",\n  \"details\": {\"path\": \"/v1.0\", \"items\": [1, 2]}\n}.\nallow users to access PayrollRecords.";
+        let source = "define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.\nservice PayrollRecords as json {\n  \"service_class\": \"PayrollRecords\",\n  \"endpoint\": \"zpr://payroll-records\",\n  \"details\": {\"path\": \"/v1.0\", \"items\": [1, 2]}\n}.\nallow users.";
         let ctx = CompilationCtx::default();
         let tokens = tokenize_str(source, &ctx).expect("embedded JSON should tokenize");
         let policy = parse(tokens.tokens, &ctx)
@@ -629,6 +739,13 @@ mod test {
         assert_eq!(policy.embedded_services[0].service_class, "PayrollRecords");
         assert_eq!(policy.embedded_services[0].record["details"]["items"][1], 2);
         assert_eq!(policy.allows.len(), 1);
+        assert_eq!(
+            policy.allows[0]
+                .get_server_service_clause()
+                .expect("embedded service should scope the following policy")
+                .class,
+            "PayrollRecords"
+        );
     }
 
     #[test]
@@ -1349,25 +1466,34 @@ allow marketing-emps to access role:marketing services.
             Ok(_) => panic!("intervening define should close service scope"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("immediately follow a provide"));
-    }
-
-    #[test]
-    fn test_service_scoped_rule_rejects_explicit_target() {
-        let input = "define payroll as a service with device.zpr.adapter.cn:payroll.\n\
-            provide payroll at payroll.finance.svc.zpr over TCP 443.\n\
-            allow users to access payroll.";
-        let ctx = CompilationCtx::default();
-        let tokens = tokenize_str(input, &ctx).unwrap();
-        let error = match parse(tokens.tokens, &ctx) {
-            Ok(_) => panic!("scoped rules should not repeat the implicit service target"),
-            Err(error) => error,
-        };
         assert!(
             error
                 .to_string()
-                .contains("target is implicit after provide")
+                .contains("immediately follow a service declaration")
         );
+    }
+
+    #[test]
+    fn test_explicit_service_targets_are_rejected() {
+        let inputs = [
+            "define payroll as a service with device.zpr.adapter.cn:payroll.\n\
+                provide payroll at payroll.finance.svc.zpr over TCP 443.\n\
+                allow users to access payroll.",
+            "allow users to access services.",
+        ];
+        let ctx = CompilationCtx::default();
+        for input in inputs {
+            let tokens = tokenize_str(input, &ctx).unwrap();
+            let error = match super::parse(tokens.tokens, &ctx) {
+                Ok(_) => panic!("explicit service target should be rejected: {input}"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot specify a service target")
+            );
+        }
     }
 
     // A signal clause must survive the full parse() pipeline intact and be

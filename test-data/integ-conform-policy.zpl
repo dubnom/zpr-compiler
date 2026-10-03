@@ -11,11 +11,16 @@ define PingableService as a service with device.zpr.adapter.cn:'service.zpr.org'
 define SpecialClient as an adapter with device.zpr.adapter.cn:'client.zpr.org'.
 
 # the SpecialClient can access three services
-allow SpecialClient to access WebService.
-allow SpecialClient to access IPerfService.
-allow SpecialClient to access PingableService.
+service WebService as json {"service_class":"WebService"}.
+allow SpecialClient.
+service IPerfService as json {"service_class":"IPerfService"}.
+allow SpecialClient.
+service PingableService as json {"service_class":"PingableService"}.
+allow SpecialClient.
 
 # any connected adapter can ping the node
-allow adapter to access PingableNode.
+service PingableNode as json {"service_class":"PingableNode"}.
+allow adapter.
 
-allow zpr.adapter.cn:'client.zpr.org' devices to access VisaService.
+provide VisaService at visa-admin.svc.zpr over TCP 443.
+allow zpr.adapter.cn:'client.zpr.org' devices.

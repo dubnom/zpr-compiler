@@ -1,8 +1,9 @@
-define WebService as a service with user.markers:{web, service}.
+define WebService as a service with user.markers:{web, service} and service.content:{green, marketing, edu, govt, red} and device.zpr.adapter.cn:webservice.
 
-allow role:{manager, marketing} users to access content:{green, marketing} services.
+provide WebService at web.svc.zpr over TCP 80.
+allow role:{manager, marketing} users.
 
-allow role:intern users to access content:{edu, govt} services.
+allow role:intern users.
 
 # Ok to use set notation here too though not required.
-allow role:{foo} users to access content:{red} services.
+allow role:{foo} users.
