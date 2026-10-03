@@ -3,6 +3,7 @@ pub fn format_zpl(source: &str) -> String {
     let mut formatted = String::with_capacity(source.len());
     let mut previous_line_is_blank = true;
     let mut is_first_line = true;
+    let mut permission_block_is_open = false;
 
     for line in source.split_inclusive('\n') {
         let content = line
@@ -11,9 +12,13 @@ pub fn format_zpl(source: &str) -> String {
             .strip_suffix('\r')
             .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
         let is_service_declaration = is_statement_start(content, &["provide", "service"]);
+        let ends_permission_block = is_statement_start(content, &["define", "provide", "service"]);
         let is_policy_statement = is_statement_start(content, &["allow", "deny", "never"]);
 
-        if !is_first_line && is_service_declaration && !previous_line_is_blank {
+        if !is_first_line
+            && !previous_line_is_blank
+            && (is_service_declaration || (permission_block_is_open && ends_permission_block))
+        {
             if line.ends_with("\r\n") || formatted.ends_with("\r\n") {
                 formatted.push_str("\r\n");
             } else {
@@ -21,9 +26,13 @@ pub fn format_zpl(source: &str) -> String {
             }
         }
 
+        if ends_permission_block {
+            permission_block_is_open = false;
+        }
         if is_policy_statement {
             formatted.push_str("  ");
             formatted.push_str(line.trim_start());
+            permission_block_is_open = true;
         } else {
             formatted.push_str(line);
         }
@@ -77,6 +86,27 @@ mod tests {
         assert_eq!(
             format_zpl(source),
             "# policy\ndefine team as user.\n  allow staff\n  on managed devices.\n  deny guests.\n  never allow guests.\n\nservice Api as json {}\n"
+        );
+    }
+
+    #[test]
+    fn separates_permission_blocks_from_following_definitions_and_services() {
+        let source = "provide Api at api.example over TCP 443.\nallow staff.\ndeny guests.\ndefine team as user.\nservice Other as json {}\n";
+
+        assert_eq!(
+            format_zpl(source),
+            "provide Api at api.example over TCP 443.\n  allow staff.\n  deny guests.\n\ndefine team as user.\n\nservice Other as json {}\n"
+        );
+    }
+
+    #[test]
+    fn keeps_existing_single_separator_after_permission_blocks() {
+        let source =
+            "provide Api at api.example over TCP 443.\n  allow staff.\n\ndefine team as user.\n";
+
+        assert_eq!(
+            format_zpl(source),
+            "provide Api at api.example over TCP 443.\n  allow staff.\n\ndefine team as user.\n"
         );
     }
 

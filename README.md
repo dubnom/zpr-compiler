@@ -12,9 +12,10 @@ cargo run --bin zplfmt -- path/to/policy.zpl
 ```
 
 `zplfmt` writes formatted ZPL to standard output. It indents `allow`, `deny`,
-and `never` statements by two spaces and inserts a blank line before `provide`
-and embedded `service` declarations when they follow a nonblank line. Other
-lines remain left-aligned.
+and `never` statements by two spaces, inserts a blank line before `provide` and
+embedded `service` declarations when they follow a nonblank line, and adds a
+blank line before the next `define` or service declaration after a permission
+block. Other lines remain left-aligned.
 
 - That RSA key in the invocation is used to sign the binary policy so
   must match the one that the visa service is configured with.
