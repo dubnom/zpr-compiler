@@ -92,12 +92,19 @@ pub fn parse_define(
         class_id: statement_num,
     };
 
-    match tokens.peek() {
+    match tokens.peek().copied() {
         Some(tok) => {
             if tok.tt == TokenType::With {
                 // consume the WITH token
                 tokens.next();
                 parse_attributes(&mut class, &mut tokens)?;
+                if class.with_attrs.is_empty() {
+                    return Err(CompilationError::DefineStmtParseError(
+                        "WITH requires at least one attribute".to_string(),
+                        tok.line,
+                        tok.col,
+                    ));
+                }
             } else {
                 return Err(CompilationError::DefineStmtParseError(
                     "expected WITH clause".to_string(),
@@ -395,6 +402,32 @@ mod test {
 
     use super::*;
     use crate::{context::CompilationCtx, lex::tokenize_str};
+
+    #[test]
+    fn test_empty_with_clause_errors() {
+        let ctx = CompilationCtx::default();
+        for statement in [
+            "define FooBar as a user with.",
+            "define FooBar as a user with # no attributes\n.",
+            "define FooBar as a user with tag.",
+            "define FooBar as a user with tags.",
+            "define FooBar as a user with multiple.",
+        ] {
+            let tokenization = tokenize_str(statement, &ctx).unwrap();
+            let error = match crate::parser::parse(tokenization.tokens, &ctx) {
+                Ok(_) => panic!("empty WITH clause accepted: {statement}"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("WITH requires at least one attribute"),
+                "unexpected error: {error}"
+            );
+        }
+        let tokenization = tokenize_str("define FooBar as a user.", &ctx).unwrap();
+        assert!(crate::parser::parse(tokenization.tokens, &ctx).is_ok());
+    }
 
     #[test]
     fn test_required_tag() {

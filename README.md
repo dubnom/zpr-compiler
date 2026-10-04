@@ -4,6 +4,9 @@ Can translate simple ZPL into binary policies that the prototype visa
 service can process.  This comes bundled with a tool to examine the
 contents of a "compiled" binary policy, `zpdump`.
 
+Class definitions may omit `with`, but a written `with` clause must contain
+at least one attribute. `define FooBar as a user with.` is a syntax error.
+
 ## Example usage
 
 ```bash
@@ -11,11 +14,15 @@ contents of a "compiled" binary policy, `zpdump`.
 cargo run --bin zplfmt -- path/to/policy.zpl
 ```
 
-`zplfmt` writes formatted ZPL to standard output. It indents `allow`, `deny`,
-and `never` statements by two spaces, inserts a blank line before `provide` and
+`zplfmt` writes formatted ZPL to standard output. Consecutive blank lines are
+condensed to one, including whitespace-only lines and trailing blank lines.
+It indents `allow`, `deny`,
+and `never` statements by two spaces, removes leading whitespace and blank lines
+between consecutive definitions or within service permission groups, and
+inserts a blank line before `provide` and
 embedded `service` declarations when they follow a nonblank line, and adds a
 blank line before the next `define` or service declaration after a permission
-block. Other lines remain left-aligned.
+block. Comments, multiline statement content, and line endings are preserved.
 
 - That RSA key in the invocation is used to sign the binary policy so
   must match the one that the visa service is configured with.

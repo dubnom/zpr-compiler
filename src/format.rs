@@ -4,16 +4,37 @@ pub fn format_zpl(source: &str) -> String {
     let mut previous_line_is_blank = true;
     let mut is_first_line = true;
     let mut permission_block_is_open = false;
+    let mut previous_statement_was_define = false;
+    let mut service_block_is_open = false;
+    let mut pending_lines = Vec::new();
 
-    for line in source.split_inclusive('\n') {
+    for line in source.trim_start().split_inclusive('\n') {
         let content = line
             .strip_suffix('\n')
             .unwrap_or(line)
             .strip_suffix('\r')
             .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
+        if content.trim().is_empty()
+            || content.trim_start().starts_with('#')
+            || content.trim_start().starts_with("//")
+        {
+            pending_lines.push(line);
+            continue;
+        }
+        let is_define = is_statement_start(content, &["define"]);
         let is_service_declaration = is_statement_start(content, &["provide", "service"]);
         let ends_permission_block = is_statement_start(content, &["define", "provide", "service"]);
         let is_policy_statement = is_statement_start(content, &["allow", "deny", "never"]);
+        let remove_blank_lines = (is_define && previous_statement_was_define)
+            || (is_policy_statement && service_block_is_open);
+        for pending_line in pending_lines.drain(..) {
+            if pending_line.trim().is_empty() && (remove_blank_lines || previous_line_is_blank) {
+                continue;
+            }
+            formatted.push_str(pending_line);
+            previous_line_is_blank = pending_line.trim().is_empty();
+            is_first_line = false;
+        }
 
         if !is_first_line
             && !previous_line_is_blank
@@ -28,16 +49,27 @@ pub fn format_zpl(source: &str) -> String {
 
         if ends_permission_block {
             permission_block_is_open = false;
+            previous_statement_was_define = is_define;
+            service_block_is_open = is_service_declaration;
         }
         if is_policy_statement {
             formatted.push_str("  ");
             formatted.push_str(line.trim_start());
             permission_block_is_open = true;
+            previous_statement_was_define = false;
+            service_block_is_open = true;
         } else {
             formatted.push_str(line);
         }
         previous_line_is_blank = content.trim().is_empty();
         is_first_line = false;
+    }
+    for pending_line in pending_lines {
+        if pending_line.trim().is_empty() && previous_line_is_blank {
+            continue;
+        }
+        formatted.push_str(pending_line);
+        previous_line_is_blank = pending_line.trim().is_empty();
     }
 
     formatted
@@ -128,5 +160,48 @@ mod tests {
             format_zpl(source),
             "define staff as user.\r\n\r\nprovide Api at api.example over TCP 443.\r\n"
         );
+    }
+
+    #[test]
+    fn removes_leading_whitespace_and_blank_lines_between_definitions() {
+        let source = " \n\t\n  define staff as user.\n\n# Members\n\ndefine team as user.\n";
+        let expected = "define staff as user.\n# Members\ndefine team as user.\n";
+        assert_eq!(format_zpl(source), expected);
+        assert_eq!(format_zpl(expected), expected);
+        assert_eq!(format_zpl(" \r\n\t\n"), "");
+    }
+
+    #[test]
+    fn removes_blank_lines_inside_service_permission_groups() {
+        let source = "\r\nprovide Api at api.example over TCP 443.\r\n\r\n# Callers\r\n\r\nallow staff.\r\n\r\ndeny guests.\r\n\r\nnever allow interns.\r\nservice Other as json {}.\r\n\r\nallow team.\r\n";
+        let expected = "provide Api at api.example over TCP 443.\r\n# Callers\r\n  allow staff.\r\n  deny guests.\r\n  never allow interns.\r\n\r\nservice Other as json {}.\r\n  allow team.\r\n";
+        assert_eq!(format_zpl(source), expected);
+        assert_eq!(format_zpl(expected), expected);
+    }
+
+    #[test]
+    fn preserves_blank_lines_inside_multiline_statements() {
+        let source = "define staff as user\n\n  with department:finance.\n\ndefine team as user.\n";
+        assert_eq!(
+            format_zpl(source),
+            "define staff as user\n\n  with department:finance.\ndefine team as user.\n"
+        );
+    }
+
+    #[test]
+    fn condenses_blank_line_runs_around_comments_and_at_end_of_file() {
+        let source = "define staff as user.\n\n\n# Services\n\n\nprovide Api at api.example over TCP 443.\n\nallow staff.\n\n\nprovide Other at other.example over TCP 80.\nallow staff.\n\n\n";
+        let expected = "define staff as user.\n\n# Services\n\nprovide Api at api.example over TCP 443.\n  allow staff.\n\nprovide Other at other.example over TCP 80.\n  allow staff.\n\n";
+        assert_eq!(format_zpl(source), expected);
+        assert_eq!(format_zpl(expected), expected);
+    }
+
+    #[test]
+    fn condenses_whitespace_only_blank_lines_with_crlf() {
+        let source = "# Heading\r\n \r\n\t\r\n\r\ndefine staff as user\r\n\r\n\r\n  with department:finance.\r\n\r\n\r\n";
+        let expected =
+            "# Heading\r\n \r\ndefine staff as user\r\n\r\n  with department:finance.\r\n\r\n";
+        assert_eq!(format_zpl(source), expected);
+        assert_eq!(format_zpl(expected), expected);
     }
 }
