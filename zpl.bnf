@@ -47,6 +47,8 @@
 // and comments do not. A rule before a provide or after a group-ending
 // declaration is invalid. An explicit "to access" target is invalid even when
 // it repeats the current service. A class may have only one provide declaration.
+// The bare phrase "to access" after the subject is optional and implied when
+// omitted; it never introduces an explicit service target.
 
 <statement-terminator> ::= "." (<newline> | <end-of-input>)
 
@@ -69,13 +71,18 @@
 // provide starts a new group, while define or embedded JSON ends the group.
 // The target is implicit and may not be repeated or replaced. "on" constrains
 // only the subject's device; target-side restrictions belong to the service class.
-<scoped-p-statement> ::= <subject-clause> <over-clause>? <signal-clause>?
+<scoped-p-statement> ::= <subject-clause> <implicit-access-clause>?
+                         <over-clause>? <signal-clause>?
+<implicit-access-clause> ::= "to" "access"
 
-// The JSON object is parsed and retained in the AST, but does not supply DNS
-// identity or transport scope for the signed policy. Its service_class field
-// must match the named user-defined service class. Following allow/never-allow
-// statements are scoped to this service. JSON comments are invalid.
+// Embedded metadata does not supply DNS identity or transport scope. The JSON
+// compatibility form requires a matching service_class. The with-form infers
+// service_class and accepts scalar actor_cn, endpoint, summary, and status fields.
+// Following allow/never-allow statements are scoped to this service.
 <embedded-service> ::= "service" <service-class-name> "as" "json" <json-object>
+                     | "service" <service-class-name> "with" <service-fields>
+<service-fields> ::= <service-field> ("," <service-field>)*
+<service-field> ::= <metadata-key> ":" <scalar-value>
 <json-object> ::= <RFC-8259-JSON-object>
 <transport-protocol> ::= "tcp" | "udp"
 <dns-name> ::= <name>

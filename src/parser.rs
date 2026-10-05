@@ -313,11 +313,14 @@ fn parse_access_rule(
         .chain(signal_start)
         .min()
         .unwrap_or(statement.len());
-    let has_explicit_target = statement[clause_start..boundary]
+    let access_start = statement[clause_start..boundary]
         .iter()
-        .any(|token| token.tt == TokenType::To);
+        .position(|token| token.tt == TokenType::To)
+        .map(|index| clause_start + index);
+    let has_optional_access = access_start
+        .is_some_and(|index| index + 2 == boundary && statement[index + 1].tt == TokenType::Access);
 
-    if has_explicit_target {
+    if access_start.is_some() && !has_optional_access {
         let root = &statement[0];
         return Err(CompilationError::ParseError(
             "access rules cannot specify a service target; follow a `provide` declaration and omit `to access <service>`".into(),
@@ -338,7 +341,7 @@ fn parse_access_rule(
     let root = &statement[0];
     let last = statement.last().expect("access rule has a final token");
     normalized_statement.splice(
-        boundary..boundary,
+        access_start.unwrap_or(boundary)..boundary,
         [
             Token::new(TokenType::To, root.line, root.col, 2),
             Token::new(TokenType::Access, root.line, root.col, 6),
@@ -366,12 +369,13 @@ fn parse_embedded_service(
     classes: &HashMap<String, Class>,
 ) -> Result<EmbeddedService, CompilationError> {
     let start = &statement[0];
-    if statement.len() != 5
-        || statement[2].tt != TokenType::As
-        || !literal(&statement[3]).is_some_and(|value| value.eq_ignore_ascii_case("json"))
-    {
+    let json_form = statement.len() == 5
+        && statement[2].tt == TokenType::As
+        && literal(&statement[3]).is_some_and(|value| value.eq_ignore_ascii_case("json"));
+    let fields_form = statement.len() >= 4 && statement[2].tt == TokenType::With;
+    if !json_form && !fields_form {
         return Err(CompilationError::ParseError(
-            "expected `service <service-class> as json <JSON object>`".into(),
+            "expected `service <service-class> as json <JSON object>` or `service <service-class> with <field>:<value>`".into(),
             start.line,
             start.col,
         ));
@@ -400,38 +404,111 @@ fn parse_embedded_service(
             statement[1].col,
         ));
     }
-    let TokenType::Json(raw) = &statement[4].tt else {
-        return Err(CompilationError::ParseError(
-            "expected JSON object".into(),
-            start.line,
-            start.col,
-        ));
+    let record = if json_form {
+        let TokenType::Json(raw) = &statement[4].tt else {
+            return Err(CompilationError::ParseError(
+                "expected JSON object".into(),
+                start.line,
+                start.col,
+            ));
+        };
+        let record: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+            CompilationError::ParseError(
+                format!("invalid service JSON: {error}"),
+                statement[4].line,
+                statement[4].col,
+            )
+        })?;
+        let Some(object) = record.as_object() else {
+            return Err(CompilationError::ParseError(
+                "service JSON must be an object".into(),
+                start.line,
+                start.col,
+            ));
+        };
+        if object
+            .get("service_class")
+            .and_then(serde_json::Value::as_str)
+            != Some(canonical.as_str())
+        {
+            return Err(CompilationError::ParseError(
+                format!("service JSON service_class must match {canonical}"),
+                start.line,
+                start.col,
+            ));
+        }
+        record
+    } else {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "service_class".into(),
+            serde_json::Value::String(canonical.clone()),
+        );
+        let supported_fields = ["actor_cn", "endpoint", "summary", "status"];
+        let mut field_count = 0;
+        let mut expect_field = true;
+        for token in &statement[3..] {
+            match &token.tt {
+                TokenType::Tuple((field, values)) => {
+                    let field = field.to_ascii_lowercase();
+                    if !expect_field {
+                        return Err(CompilationError::ParseError(
+                            "service fields must be separated by commas".into(),
+                            token.line,
+                            token.col,
+                        ));
+                    }
+                    if !supported_fields.contains(&field.as_str()) {
+                        return Err(CompilationError::ParseError(
+                            format!("unsupported service field {field}"),
+                            token.line,
+                            token.col,
+                        ));
+                    }
+                    if values.len() != 1 {
+                        return Err(CompilationError::ParseError(
+                            format!("service field {field} requires exactly one value"),
+                            token.line,
+                            token.col,
+                        ));
+                    }
+                    if object.contains_key(&field) {
+                        return Err(CompilationError::ParseError(
+                            format!("duplicate service field {field}"),
+                            token.line,
+                            token.col,
+                        ));
+                    }
+                    object.insert(field, serde_json::Value::String(values[0].clone()));
+                    field_count += 1;
+                    expect_field = false;
+                }
+                TokenType::Comma if !expect_field => expect_field = true,
+                TokenType::Comma => {
+                    return Err(CompilationError::ParseError(
+                        "expected a service field before comma".into(),
+                        token.line,
+                        token.col,
+                    ));
+                }
+                _ => {
+                    return Err(CompilationError::ParseError(
+                        "expected service field as key:value".into(),
+                        token.line,
+                        token.col,
+                    ));
+                }
+            }
+        }
+        if field_count == 0 || expect_field {
+            return Err(CompilationError::ParseError(
+                "service with-form requires fields and cannot end with a comma".into(),
+                start.line,
+                start.col,
+            ));
+        }
+        serde_json::Value::Object(object)
     };
-    let record: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
-        CompilationError::ParseError(
-            format!("invalid service JSON: {error}"),
-            statement[4].line,
-            statement[4].col,
-        )
-    })?;
-    let Some(object) = record.as_object() else {
-        return Err(CompilationError::ParseError(
-            "service JSON must be an object".into(),
-            start.line,
-            start.col,
-        ));
-    };
-    if object
-        .get("service_class")
-        .and_then(serde_json::Value::as_str)
-        != Some(canonical.as_str())
-    {
-        return Err(CompilationError::ParseError(
-            format!("service JSON service_class must match {canonical}"),
-            start.line,
-            start.col,
-        ));
-    }
     Ok(EmbeddedService {
         service_class: canonical.clone(),
         record,
@@ -728,6 +805,56 @@ mod test {
     }
 
     #[test]
+    fn test_optional_to_access() {
+        let ctx = CompilationCtx::default();
+        for keyword in ["allow", "never allow"] {
+            for suffix in [
+                "",
+                " over secure links",
+                " and signal \"audit\" to PayrollAPI",
+            ] {
+                for wording in ["", " to access", " TO ACCESS"] {
+                    let source = format!(
+                        "define PayrollAPI as a service.\nprovide PayrollAPI at payroll.svc.zpr over TCP 443.\n{keyword} users{wording}{suffix}."
+                    );
+                    let tokens = tokenize_str(&source, &ctx).expect("rule should tokenize");
+                    let policy = super::parse(tokens.tokens, &ctx)
+                        .expect("optional access wording should parse")
+                        .policy;
+                    let clauses = if keyword == "allow" {
+                        &policy.allows
+                    } else {
+                        &policy.nevers
+                    };
+                    assert_eq!(clauses.len(), 1);
+                    assert_eq!(
+                        clauses[0].get_server_service_clause().unwrap().class,
+                        "PayrollAPI"
+                    );
+                    assert_eq!(clauses[0].link.is_some(), suffix.contains("over"));
+                    assert_eq!(clauses[0].signal.is_some(), suffix.contains("signal"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_explicit_service_target_is_rejected() {
+        let source = "define PayrollAPI as a service.\nprovide PayrollAPI at payroll.svc.zpr over TCP 443.\nallow users to access PayrollAPI.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(source, &ctx).expect("explicit-target fixture should tokenize");
+        let error = match super::parse(tokens.tokens, &ctx) {
+            Ok(_) => panic!("explicit service target unexpectedly parsed"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("access rules cannot specify a service target")
+        );
+    }
+
+    #[test]
     fn test_embedded_service_json() {
         let source = "define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.\nservice PayrollRecords as json {\n  \"service_class\": \"PayrollRecords\",\n  \"endpoint\": \"zpr://payroll-records\",\n  \"details\": {\"path\": \"/v1.0\", \"items\": [1, 2]}\n}.\nallow users.";
         let ctx = CompilationCtx::default();
@@ -738,6 +865,30 @@ mod test {
         assert_eq!(policy.embedded_services.len(), 1);
         assert_eq!(policy.embedded_services[0].service_class, "PayrollRecords");
         assert_eq!(policy.embedded_services[0].record["details"]["items"][1], 2);
+        assert_eq!(policy.allows.len(), 1);
+        assert_eq!(
+            policy.allows[0]
+                .get_server_service_clause()
+                .expect("embedded service should scope the following policy")
+                .class,
+            "PayrollRecords"
+        );
+    }
+
+    #[test]
+    fn test_embedded_service_with_fields() {
+        let source = "define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.\nservice PayrollRecords with actor_cn:payroll-records, endpoint:\"zpr://payroll-records\", summary:\"Payroll records\".\nallow users.";
+        let ctx = CompilationCtx::default();
+        let tokens = tokenize_str(source, &ctx).expect("service fields should tokenize");
+        let policy = parse(tokens.tokens, &ctx)
+            .expect("service fields should parse")
+            .policy;
+        assert_eq!(policy.embedded_services.len(), 1);
+        let record = &policy.embedded_services[0].record;
+        assert_eq!(record["service_class"], "PayrollRecords");
+        assert_eq!(record["actor_cn"], "payroll-records");
+        assert_eq!(record["endpoint"], "zpr://payroll-records");
+        assert_eq!(record["summary"], "Payroll records");
         assert_eq!(policy.allows.len(), 1);
         assert_eq!(
             policy.allows[0]
@@ -766,6 +917,10 @@ mod test {
             (
                 "service PayrollRecords as json {\"service_class\":\"PayrollRecords\"",
                 "unterminated service JSON object",
+            ),
+            (
+                "service PayrollRecords with unknown:value.",
+                "unsupported service field unknown",
             ),
         ];
         let ctx = CompilationCtx::default();

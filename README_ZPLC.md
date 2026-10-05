@@ -342,16 +342,26 @@ never allow contractor users.
 allow` statements apply to that service and omit `to access <service>`; the
 target is supplied by the preceding declaration. The group ends at the next
 non-rule statement. Class definitions remain order-independent, but placing a
-definition between `provide` and its rules closes the group. The explicit-target
-form remains available outside a scoped group for migration of existing
-policies.
+definition between `provide` and its rules closes the group. Explicit
+`to access <service>` targets are rejected everywhere; the active service
+declaration supplies the target.
 
 The DNS name is normalized to lowercase and emitted as the service ID in the
 signed policy. The compiler currently supports one TCP or UDP port per service
 declaration. A declaration compiles without an application `[services.*]`
 table.
 
-For existing JSON service records, ZPL also accepts an embedded definition:
+For simple service metadata, use the native `with` form. The class name supplies
+`service_class`; supported scalar fields are `actor_cn`, `endpoint`, `summary`,
+and `status`:
+
+```zpl
+define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.
+service PayrollRecords with actor_cn:payroll-records, endpoint:"zpr://payroll-records", summary:"Payroll records".
+```
+
+Use the embedded JSON form when a service record needs nested or otherwise
+unsupported metadata:
 
 ```zpl
 define PayrollRecords as a service with device.zpr.adapter.cn:payroll-records.
@@ -359,10 +369,9 @@ service PayrollRecords as json {"service_class":"PayrollRecords","actor_cn":"pay
 ```
 
 The JSON must be a valid object whose `service_class` matches the named class.
-The compiler retains it in the parsed policy, but does not translate its fields
-into signed policy or infer a transport scope. Use `provide` or legacy
-`[services.*]` configuration for that scope. This JSON syntax is intended as
-a transition to native ZPL service definitions.
+Both metadata forms are retained in the parsed policy; neither defines a DNS
+identity or transport scope. Use `provide` or legacy `[services.*]` configuration
+for that scope.
 
 `[services.*]` remains temporarily supported for existing policies. It cannot
 declare a DNS identity and should be migrated to ZPL. Legacy tables may
