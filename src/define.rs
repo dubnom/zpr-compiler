@@ -623,7 +623,7 @@ mod test {
         let class = parse_define(&tz.tokens, 1).unwrap();
         assert_eq!(class.name, "mouse");
         assert_eq!(class.aka.as_deref(), Some("mice"));
-        assert_eq!(class.plural, "mouses")
+        assert_eq!(class.plural, "mice")
     }
 
     // Without an AKA clause, aka must be None and the auto-plural still populated.
@@ -635,6 +635,16 @@ mod test {
         let class = parse_define(&tz.tokens, 1).unwrap();
         assert_eq!(class.aka, None);
         assert_eq!(class.plural, "boxes");
+    }
+
+    #[test]
+    fn test_no_aka_uses_irregular_plural() {
+        let statement = "define mouse as a user with id";
+        let ctx = CompilationCtx::default();
+        let tz = tokenize_str(statement, &ctx).unwrap();
+        let class = parse_define(&tz.tokens, 1).unwrap();
+        assert_eq!(class.aka, None);
+        assert_eq!(class.plural, "mice");
     }
 
     // The "optional" modifier on a tag must set attr.optional = true; it is only

@@ -1183,7 +1183,7 @@ allow marketing-emps to access role:marketing services.
     #[test]
     fn test_plural_in_allow_with_aka() {
         let input =
-            "define mouse AKA mice as a user with device-id.\nallow mouses to access services.";
+            "define mouse AKA mice as a user with device-id.\nallow mice to access services.";
         let ctx = CompilationCtx::default();
         let tz = tokenize_str(input, &ctx).unwrap();
         let pr = parse(tz.tokens, &ctx).expect("should parse");

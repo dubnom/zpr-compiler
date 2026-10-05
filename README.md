@@ -7,6 +7,12 @@ contents of a "compiled" binary policy, `zpdump`.
 Class definitions may omit `with`, but a written `with` clause must contain
 at least one attribute. `define FooBar as a user with.` is a syntax error.
 
+Defined class names receive an automatic English plural alias through the
+`pluralizer` crate. For example, `define mouse as a user with id.` can be
+referenced as `mice` in a permission. Attribute multiplicity is separate:
+trusted-service mappings use `{}` (for example, `user.role{}`) to mark a
+multi-valued attribute.
+
 ## Example usage
 
 ```bash

@@ -1,5 +1,6 @@
 use crate::errors::CompilationError;
 use crate::lex::{Token, TokenType};
+use pluralizer::pluralize as pluralize_word;
 
 // Given the next token in the list, we error out if that token is not of the expected type.
 pub fn require_tt(
@@ -58,24 +59,8 @@ pub fn return_literal(
     Ok(value.clone())
 }
 
-// Pluralize a string by adding an "s" or "es" to the end. Does not handle complex pluralization rules, but handles the most common cases.
 pub fn pluralize(s: &str) -> String {
-    let ls = s.to_lowercase();
-    let possible_es = ["s", "sh", "ch", "x", "z"];
-    let consonants = "bcdfghjklmnpqrstvwxyz";
-    let word_with_consonant_o = ls.ends_with("o")
-        && ls
-            .chars()
-            .rev()
-            .nth(1)
-            .is_some_and(|c| consonants.contains(c));
-    let needs_es = word_with_consonant_o || possible_es.iter().any(|&ending| ls.ends_with(ending));
-    let suffix = if needs_es { "es" } else { "s" };
-    if s.chars().last().is_some_and(char::is_uppercase) {
-        format!("{s}{}", suffix.to_uppercase())
-    } else {
-        format!("{s}{suffix}")
-    }
+    pluralize_word(s, 2, false)
 }
 
 #[test]
@@ -88,8 +73,11 @@ fn test_pluralize() {
     assert_eq!(pluralize("potato"), "potatoes");
     assert_eq!(pluralize("radio"), "radios");
     assert_eq!(pluralize("VisaService"), "VisaServices");
+    assert_eq!(pluralize("mouse"), "mice");
+    assert_eq!(pluralize("Mouse"), "Mice");
+    assert_eq!(pluralize("person"), "people");
     assert_eq!(pluralize("BOX"), "BOXES");
     assert_eq!(pluralize("POTATO"), "POTATOES");
     assert_eq!(pluralize("o"), "os");
-    assert_eq!(pluralize(""), "s");
+    assert_eq!(pluralize(""), "");
 }
