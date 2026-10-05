@@ -21,6 +21,7 @@ use crate::weaver::weave;
 pub struct Compilation {
     pub verbose: bool,
     werror: bool,
+    lint: bool,
     pub source_zpl: PathBuf,
     pub source_config: PathBuf,
     pub output_file: PathBuf,
@@ -248,6 +249,15 @@ impl Compilation {
         let pr = parse(tz.tokens, &cctx)?;
         let mut policy = pr.policy;
 
+        if self.lint {
+            for diagnostic in crate::lint::lint_policy(&policy) {
+                println!(
+                    "ZPR_LINT {}",
+                    serde_json::to_string(&diagnostic).expect("lint diagnostic is serializable")
+                );
+            }
+        }
+
         self.copy_zpl_from_permissions(&policy)?;
 
         let policy_digest = sha256_of_file(&self.source_zpl)?;
@@ -337,6 +347,7 @@ pub struct CompilationBuilder {
     source_config: Option<PathBuf>,
     verbose: bool,
     werror: bool,
+    lint: bool,
     private_key: Option<Rsa<Private>>,
     parse_only: bool,
     output_directory: Option<PathBuf>,
@@ -369,6 +380,12 @@ impl CompilationBuilder {
     /// Just builds the fabric in memory, does not try to create the policy protobuf binary.
     pub fn parse_only(mut self, parse_only: bool) -> Self {
         self.parse_only = parse_only;
+        self
+    }
+
+    /// Emit structured advisory diagnostics without changing compilation decisions.
+    pub fn lint(mut self, lint: bool) -> Self {
+        self.lint = lint;
         self
     }
 
@@ -440,6 +457,7 @@ impl CompilationBuilder {
         Compilation {
             verbose: self.verbose,
             werror: self.werror,
+            lint: self.lint,
             source_zpl: self.source_zpl,
             source_config: config,
             output_file,

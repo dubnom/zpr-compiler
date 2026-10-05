@@ -24,6 +24,7 @@ mod fabric;
 mod fabric_util;
 pub mod format;
 mod lex;
+mod lint;
 mod never;
 mod parser;
 pub mod policybinaryv2;

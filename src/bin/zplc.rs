@@ -48,6 +48,10 @@ struct Cli {
     /// Treat warnings like errors and halt compilation when they occur.
     #[arg(long = "Werror")]
     werror: bool,
+
+    /// Emit structured advisory best-practice warnings; does not change exit status.
+    #[arg(long)]
+    lint: bool,
 }
 
 fn main() {
@@ -55,7 +59,8 @@ fn main() {
     let cli = Cli::parse();
     let mut cb = Compilation::builder(cli.zpl)
         .verbose(cli.verbose)
-        .werror(cli.werror);
+        .werror(cli.werror)
+        .lint(cli.lint);
     if cli.parse_only {
         cb = cb.parse_only(true);
     }

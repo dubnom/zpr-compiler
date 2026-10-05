@@ -38,6 +38,25 @@ block. Comments, multiline statement content, and line endings are preserved.
   `-c path/to/config.zplc` argument.
 - Help is available via `zplc -h`
 
+## Advisory Lint
+
+```sh
+./zplc --parse-only --lint -c path/to/config.zplc path/to/policy.zpl
+```
+
+`--lint` examines the parsed policy and emits `ZPR_LINT` JSON diagnostics with
+code, severity, source line and message. It reports individual accessor identity
+selectors (including inherited classes), equivalent duplicate rules,
+conservative redundant grants, unrestricted grants, and service groups with no
+access rules. User/group roles and department/posture predicates are preferred;
+provider identity bindings for a declared service are not accessor warnings.
+
+Infrastructure-specific device selectors can be intentional. Lint does not
+rewrite policy, affect signed output, or change compilation exit status.
+Existing compiler warnings retain their separate `--Werror` behavior. Redundancy
+analysis compares parsed accessor conjunctions with the same target, link and
+signal behavior; it is not a general policy equivalence or satisfiability solver.
+
 
 ## How to build
 
